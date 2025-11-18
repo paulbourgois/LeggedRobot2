@@ -55,12 +55,12 @@ class HopfNetwork():
                 coupling_strength=1,     # coefficient to multiply coupling matrix
                 couple=True,             # whether oscillators should be coupled
                 time_step=0.001,         # time step
-                ground_clearance=0.07,   # foot swing height
+                ground_clearance=0.15,   # foot swing height
                 ground_penetration=0.01, # foot stance penetration into ground
                 robot_height=0.3,        # in nominal case (standing)
                 des_step_len=0.05,       # desired step length
                 max_step_len_rl=0.1,     # max step length, for RL scaling
-                use_RL=False             # whether to learn parameters with RL
+                use_RL=True              # whether to learn parameters with RL
                 ):
 
     # initialize CPG data structures: amplitude is row 0, and phase is row 1
@@ -152,8 +152,8 @@ class HopfNetwork():
       self._integrate_hopf_equations_rl()
 
     # map CPG variables to Cartesian foot xz positions (Equations 8, 9)
-    x = np.zeros(4) # [TODO]
-    z = np.zeros(4) # [TODO]
+    x = np.zeros(4) # [TODO] - tick
+    z = np.zeros(4) # [TODO] - tick
 
     x = - self.X[0,:] * np.cos(self.X[1,:])
     z = np.where( (self.X[1,:] % (2*np.pi)) < np.pi,
@@ -182,7 +182,7 @@ class HopfNetwork():
       # get r_i, theta_i from X
       r, theta = X[0,i], X[1,i]
       # compute r_dot (Equation 6)
-      r_dot = self._alpha*(self._mu - r**2)*r # [TODO]
+      r_dot = self._alpha*(self._mu - r**2)*r # [TODO] - tick
       # determine whether oscillator i is in swing or stance phase to set natural frequency omega_swing or omega_stance (see Section 3)
       if theta % (2*np.pi) < np.pi:
         theta_dot = self._omega_swing
@@ -199,7 +199,7 @@ class HopfNetwork():
       X_dot[:,i] = [r_dot, theta_dot]
 
     # integrate
-    self.X = np.zeros((2,4)) # [TODO]
+    # self.X = np.zeros((2,4)) # [TODO] - tick
     self.X_dot = X_dot
     self.X = X + (X_dot_prev + X_dot) * self._dt / 2
 
@@ -228,6 +228,9 @@ class HopfNetwork():
 ##################################################################################
 #  Functions for setting parameters for RL
 ##################################################################################
+
+  def get_alpha(self):
+    return self._alpha
   def set_omega_rl(self, omegas):
     """ Set intrinisc frequencies. """
     self._omega_rl = omegas
@@ -247,10 +250,10 @@ class HopfNetwork():
     for i in range(4):
       # get r_i, theta_i from X
       r, theta = X[:,i]
-      # amplitude (use mu from RL, i.e. self._mu_rl[i])
-      r_dot = 0  # [TODO]
-      # phase (use omega from RL, i.e. self._omega_rl[i])
-      theta_dot = 0 # [TODO]
+      # amplitude (use mu from RL, i.e. self._mu_rl[i]) --tick  
+      r_dot = self._alpha * (self._mu_rl[i] - pow(r,2)) * r 
+      # phase (use omega from RL, i.e. self._omega_rl[i]) --tick
+      theta_dot = self._omega_rl[i]
 
       X_dot[:,i] = [r_dot, theta_dot]
 

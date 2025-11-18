@@ -34,6 +34,7 @@ import os, inspect
 # so we can import files
 currentdir = os.path.dirname(os.path.abspath(inspect.getfile(inspect.currentframe())))
 os.sys.path.insert(0, currentdir)
+import sys
 
 # misc
 import time, datetime
@@ -71,6 +72,7 @@ def angle_between(v1, v2):
 def rotation_matrix(theta):
 	return np.array([ [np.cos(theta), -np.sin(theta) ], [np.sin(theta), np.cos(theta)] ])
 
+NUM_LEGS = 4
 ACTION_EPS = 0.01
 OBSERVATION_EPS = 0.01
 VIDEO_LOG_DIRECTORY = 'videos/' + datetime.datetime.now().strftime("vid-%Y-%m-%d-%H-%M-%S-%f")
@@ -111,9 +113,11 @@ Motor control modes:
 EPISODE_LENGTH = 10   # how long before we reset the environment (max episode length for RL)
 MAX_FWD_VELOCITY = 1  # to avoid exploiting simulator dynamics, cap max reward for body velocity
 
-# CPG quantities
+# CPG quantities, matching with ones in hopf_network.py
 MU_LOW = 1
 MU_UPP = 2
+ALPHA =  50
+F_MAX = 10 # actually I just put an arbitrary large number here, i think it does not mater anyway actually -- Nathan
 
 class QuadrupedGymEnv(gym.Env):
   """The gym environment for a quadruped {Unitree A1}.
@@ -182,10 +186,17 @@ class QuadrupedGymEnv(gym.Env):
     self._test_flagrun = test_flagrun
     self.goal_id = None
     self._terrain = terrain
+    self._terrain_difficulty = 2  # to augment our custom terrain
     if self._add_noise:
       self._observation_noise_stdev = 0.01 #
     else:
       self._observation_noise_stdev = 0.0
+
+    self.des_velocity = np.array([0.5, 0, 0])
+    # reward weights 
+    self.w_vx, self.w_vy, self.w_yaw = 0.75, 0.75, 0.75
+    self.w_vz_pen, self.w_ang_pen = 0.5, 2.0
+    self.w_work = 0.05
 
     # other bookkeeping
     self._num_bullet_solver_iterations = int(300 / action_repeat)
@@ -210,13 +221,44 @@ class QuadrupedGymEnv(gym.Env):
     self.reset()
 
   def setupCPG(self):
-    self._cpg = HopfNetwork(use_RL=True)
+    self._cpg = HopfNetwork(use_RL=True, alpha=ALPHA)
 
   ######################################################################################
   # RL Observation and Action spaces
   ######################################################################################
   def setupObservationSpace(self):
     """Set up observation space for RL. """
+    observation_high = (np.zeros(20) + OBSERVATION_EPS)
+    observation_low = (np.zeros(20) -  OBSERVATION_EPS)
+
+    # Bounds derived from the above (with a small safety margin)
+    r_max        = 1.2 * np.sqrt(MU_UPP)
+    rdot_max     = 1.2 * (ALPHA * MU_UPP * r_max)
+    theta_max    = 2.0 * np.pi
+    thetadot_max = 1.2 * (2.0 * np.pi * F_MAX)         
+
+    contact_high = np.ones(NUM_LEGS) * (1.0 + OBSERVATION_EPS)
+    contact_low  = np.zeros(NUM_LEGS) - OBSERVATION_EPS
+
+    # r ≥ 0
+    r_high  = np.ones(NUM_LEGS) * (r_max + OBSERVATION_EPS)
+    r_low   = np.zeros(NUM_LEGS) - OBSERVATION_EPS
+    rdot_high = np.ones(NUM_LEGS) * (rdot_max + OBSERVATION_EPS)
+    rdot_low  = -rdot_high
+
+    # theta [0, 2 pi)
+    theta_high = np.ones(NUM_LEGS) * (theta_max + OBSERVATION_EPS)
+    theta_low  = np.zeros(NUM_LEGS) - OBSERVATION_EPS
+
+    # theta_dot = omega >=  0
+    thetadot_high = np.ones(NUM_LEGS) * (thetadot_max + OBSERVATION_EPS)
+    thetadot_low  = np.zeros(NUM_LEGS) - OBSERVATION_EPS
+
+    #Des
+
+
+
+
     if self._observation_space_mode == "DEFAULT":
       observation_high = (np.concatenate((self._robot_config.UPPER_ANGLE_JOINT,
                                          self._robot_config.VELOCITY_LIMITS,
@@ -232,6 +274,22 @@ class QuadrupedGymEnv(gym.Env):
       observation_high = (np.zeros(50) + OBSERVATION_EPS)
       observation_low = (np.zeros(50) -  OBSERVATION_EPS)
 
+    elif self._observation_space_mode == "MINIMAL":
+      observation_high = np.concatenate([
+          contact_high, r_high, rdot_high, theta_high, thetadot_high
+      ])
+      observation_low = np.concatenate([
+          contact_low,  r_low,  rdot_low,  theta_low,  thetadot_low
+      ])
+    elif self._observation_space_mode == "MEDIUM":
+      observation_high = np.concatenate([
+          contact_high, r_high, rdot_high, theta_high, thetadot_high
+      ])
+      observation_low = np.concatenate([
+          contact_low,  r_low,  rdot_low,  theta_low,  thetadot_low
+      ])
+    elif self._observation_space_mode == "FULL":
+      pass
     else:
       raise ValueError("observation space not defined or not intended")
 
@@ -260,6 +318,69 @@ class QuadrupedGymEnv(gym.Env):
       # if using the CPG, you can include states with self._cpg.get_r(), for example
       # 50 is arbitrary
       self._observation = np.zeros(50)
+    elif self._observation_space_mode == "MINIMAL":
+      '''
+      The minimal observation space
+      consists only of foot contact booleans and the CPG states
+      {r,r, θ, ˙ θ˙}. This observation space shows that coordination
+      between limbs can be accomplished with very little sensing
+      at all, with the only environmental feedback being from foot
+      contact booleans. The idea for this space is inspired from the
+      force feedback term in traditional CPGs shown to coordinate
+      transitions between gaits [3], [4], also known as Tegotae-based
+      control [42]. The importance of contacts and limb loading
+      has also been shown by Ekeberg and Pearson in a simulation
+      of cat locomotion [43]. For this observation space, the task is
+      only to move forward at a particular desired velocity v
+      ∗
+      b,x.
+      '''
+      _, _, _, contact_bool = self.robot.GetContactInfo()
+      self._observation = np.concatenate((contact_bool,
+                                          self._cpg.get_r(),
+                                          self._cpg.get_theta(),
+                                          self._cpg.get_dr(),
+                                          self._cpg.get_dtheta(),
+                                          ))
+      
+
+    elif self._observation_space_mode == "MEDIUM":
+      '''
+      The medium observation removes the
+      joint state and last action from the full observation. This
+      observation space is chosen to show that joint information
+      is actually not necessary for omnidirectional locomotion
+      through our method. Other states remain the same (i.e. velocity
+      commands, body state (Nathan: "Okay here I use linear body velocity + body orientation, foot contact booleans, and CPG states).
+      '''
+      _, _, _, contact_bool = self.robot.GetContactInfo()
+      linear_vel = self.robot.GetBaseLinearVelocity()
+      rpy = self.robot.GetBaseOrientationRollPitchYaw()
+      self._observation = np.concatenate((contact_bool,
+                                          self._cpg.get_r(),
+                                          self._cpg.get_theta(),
+                                          self._cpg.get_dr(),
+                                          self._cpg.get_dtheta(),
+                                          self.des_velocity,
+                                          linear_vel,
+                                          rpy
+                                          ))
+      
+
+    elif self._observation_space_mode == "FULL":
+      '''
+      The full observation consists of velocity
+      commands and measurements reasonably available with
+      proprioceptive sensing, and are becoming standard in DRL
+      approaches. These include the body state (orientation, linear
+      and angular velocities), joint state (positions, velocities), and
+      foot contact booleans. The last action chosen by the policy
+      network and CPG states {r,r,θ, ˙ θ,˙ (φ,φ˙)} are concatenated
+      to the proprioceptive measurements.
+      '''
+
+
+      pass
     else:
       raise ValueError("observation space not defined or not intended")
 
@@ -368,12 +489,44 @@ class QuadrupedGymEnv(gym.Env):
             - 0.001 * energy_reward
 
     return max(reward,0) # keep rewards positive
+  
+  def _cpg_rl_tracking_term(self, error, sigma=0.25):
+    return float(np.exp(- np.sum(error**2) / sigma))
+
 
   def _reward_lr_course(self):
     """ Implement your reward function here. How will you improve upon the above? """
-    # [TODO] add your reward function.
+    # [TODO] add your reward function. -- tick
+    lin_vel_body = self.robot.GetBaseLinearVelocity()
+    ang_vel_body = self.robot.GetBaseAngularVelocity()
 
-    return 0
+    vx, vy, vz = lin_vel_body
+    w_roll, w_pitch, w_yaw = ang_vel_body
+    vx_des, vy_des, wz_des = self.des_velocity
+    
+    r_vx   = self._cpg_rl_tracking_term(vx_des - vx)
+    r_vy   = self._cpg_rl_tracking_term(vy_des - vy)
+    r_yaw  = self._cpg_rl_tracking_term(wz_des - w_yaw)
+
+    r_vz_pen   = - vz**2                     # vertical vel
+    r_ang_pen  = - (w_roll**2 + w_pitch**2)  # roll/pitch rates
+
+    # energy_reward = 0
+    # for tau,vel in zip(self._dt_motor_torques,self._dt_motor_velocities):
+    #   energy_reward += np.abs(np.dot(tau,vel)) * self._time_step
+
+
+
+    reward = (
+        self.w_vx * r_vx +
+        self.w_vy * r_vy +
+        self.w_yaw * r_yaw +
+        self.w_vz_pen * r_vz_pen +
+        self.w_ang_pen * r_ang_pen +
+        self.w_work * energy_reward
+    ) * self._time_step
+
+    return reward
 
   def _reward(self):
     """ Get reward depending on task"""
@@ -491,10 +644,12 @@ class QuadrupedGymEnv(gym.Env):
       z = zs[i]
 
       # call inverse kinematics to get corresponding joint angles
-      q_des = np.zeros(3) # [TODO]
+      # q_des = np.zeros(3) # [TODO] -- tick
+      q_des = self.robot.ComputeInverseKinematics(i, np.array([x,y,z]))
 
       # Add joint PD contribution to tau
-      tau = np.zeros(3) # [TODO]
+      # tau = np.zeros(3) # [TODO] --tick
+      tau = kp[3*i:3*i+3] * (q_des - q[3*i:3*i+3]) - kd[3*i:3*i+3] * dq[3*i:3*i+3]  # wait but actually we can improve on this, joint_vel_des needs not to be 0
 
       # add Cartesian PD contribution (as you wish)
       # tau +=
@@ -599,6 +754,18 @@ class QuadrupedGymEnv(gym.Env):
           self.add_gaps(num_gaps=5, gap_width=0.1, between_gaps_width=2)
         elif self._terrain == "RANDOM":
           self.add_random_boxes()
+        elif self._terrain == "CUSTOM_1":
+          # Custom critical terrain: combination of stairs, gaps, slopes, random obstacles
+          # to break simple open-loop CPG controllers.
+          # This will compose several existing primitives into one long, challenging
+          # track in front of the robot.
+          # You can tune difficulty via the difficulty keyword in env constructor
+          # (small ints->easier, larger->harder). We fall back to difficulty=2.
+          difficulty = getattr(self, '_terrain_difficulty', None)
+          if difficulty is None:
+            # try reading from kwargs fallback if user passed it earlier
+            difficulty = 2
+          self.add_critical_terrain(difficulty=difficulty)
         else:
           print('Terrain',self._terrain,'is not implemented')
       elif self._TASK_ENV == "FLAGRUN":
@@ -973,6 +1140,40 @@ class QuadrupedGymEnv(gym.Env):
         basePosition = [1+slope_len*np.cos(pitch)+box_width + slope_len/2 + 2*slope_height*np.sin(-pitch),0,slope_len/2*np.sin(pitch) - slope_height*np.cos(pitch) ],baseOrientation=orn) # + slope_height/2*np.cos(pitch)
     self._pybullet_client.changeDynamics(block2, -1, lateralFriction=self._ground_mu_k)
     self._add_walls()
+
+  def add_critical_terrain(self, difficulty=2):
+    """Compose multiple terrain primitives into a single long, challenging track.
+
+    difficulty: integer >=1. Higher means more stairs/gaps/obstacles and lower friction.
+    The function reuses existing primitives with parameter choices tuned to the difficulty.
+    """
+
+    # Stairs: fewer but taller when difficulty increases
+    num_stairs = max(4, 4 + difficulty * 2)
+    stair_height = 0.06 + 0.01 * difficulty
+    stair_width = 0.2
+    self.add_stairs(num_stairs=num_stairs, stair_height=stair_height, stair_width=stair_width)
+
+    '''
+    # Gaps: wider gaps when difficulty increases
+    num_gaps = max(2, difficulty + 1)
+    gap_width = 0.12 + 0.02 * difficulty
+    between_gaps_width = 1.6 - 0.05 * difficulty
+    # add gaps after stairs
+    self.add_gaps(num_gaps=num_gaps, gap_width=gap_width, between_gaps_width=between_gaps_width)
+
+    # Add a steep slope segment
+    pitch = 0.18 + 0.02 * difficulty
+    self.add_slopes(pitch=min(pitch, 0.45))
+
+    # Narrow corridor with random boxes to force foot placement accuracy
+    num_rand = 20 + 20 * difficulty
+    self.add_random_boxes(num_rand=min(num_rand, 200), z_height=0.04 + 0.01 * difficulty)
+
+    # finally, cluster of small obstacles to create uneven ground
+    self.add_random_boxes(num_rand=30 + 10 * difficulty, z_height=0.02 + 0.01 * difficulty)
+
+    '''
 
   def _add_walls(self,x_upp=20,y_low=-3):
     # add walls

@@ -47,6 +47,7 @@ from env.quadruped_gym_env import QuadrupedGymEnv
 
 ADD_CARTESIAN_PD = True
 TIME_STEP = 0.001
+TOTAL_TIME = 30 # in seconds
 foot_y = 0.0838 # this is the hip length
 sideSign = np.array([-1, 1, -1, 1]) # get correct hip sign (body right is negative)
 
@@ -57,16 +58,20 @@ env = QuadrupedGymEnv(render=True,              # visualize
                     action_repeat=1,
                     motor_control_mode="TORQUE",
                     add_noise=False,    # start in ideal conditions
+                    # terrain="CUSTOM_1", # terrain: string indicating what kind of terrain ("STAIRS", "SLOPES", "GAPS", "RANDOM"). If you want flat terrain, just put None.
+                    terrain=None, # terrain: string indicating what kind of terrain ("STAIRS", "SLOPES", "GAPS", "RANDOM"). If you want flat terrain, just put None.
                     # record_video=True
                     )
 
-# initialize Hopf Network, supply gait
-cpg = HopfNetwork(time_step=TIME_STEP)
 
-TEST_STEPS = int(10 / (TIME_STEP))
+
+# initialize Hopf Network, supply gait
+cpg = HopfNetwork(time_step=TIME_STEP, gait="WALK")
+
+TEST_STEPS = int(TOTAL_TIME / (TIME_STEP))
 t = np.arange(TEST_STEPS)*TIME_STEP
 
-# [TODO] initialize data structures to save CPG and robot states
+# [TODO] initialize data structures to save CPG and robot states - tick
 X = np.zeros((2,4,TEST_STEPS)) # CPG states
 cartesian_pos = np.zeros((4,3,TEST_STEPS)) # foot positions
 joint_pos = np.zeros((12,TEST_STEPS)) # joint angles
@@ -101,30 +106,28 @@ for j in range(TEST_STEPS):
     leg_xyz = np.array([xs[i], sideSign[i] * foot_y, zs[i]])
 
     # call inverse kinematics to get corresponding joint angles (see ComputeInverseKinematics() in quadruped.py)
-    leg_q = np.zeros(3) # [TODO]
+    # leg_q = np.zeros(3) # [TODO] - tick
     leg_q = env.robot.ComputeInverseKinematics(i, leg_xyz)
 
-    """ No VMC ? No Gravity Compensation ? Just joint PD and cartesian PD ?"""
-
     # Add joint PD contribution to tau for leg i (Equation 4)
-    tau += np.zeros(3) # [TODO]
-    tau += kp * (leg_q - q[3*i:3*i+3]) - kd * dq[3*i:3*i+3]
+    # tau += np.zeros(3) # [TODO] - tick
+    tau += kp * (leg_q - q[3*i:3*i+3]) - kd * dq[3*i:3*i+3] # joint PD
 
     # add Cartesian PD contribution
     if ADD_CARTESIAN_PD:
       # Get desired xyz position in leg frame (use ComputeJacobianAndPosition with the joint angles you just found above)
-      # [TODO]
+      # [TODO] - tick
       J, pos = env.robot.ComputeJacobianAndPosition(i, leg_q)
       # Get current Jacobian and foot position in leg frame (see ComputeJacobianAndPosition() in quadruped.py)
-      # [TODO]
+      # [TODO] - tick
       J_curr, pos_curr = env.robot.ComputeJacobianAndPosition(i, q[3*i:3*i+3])
 
       # Get current foot velocity in leg frame (Equation 2)
-      # [TODO]
+      # [TODO] - tick
       foot_vel = J @ dq[3*i:3*i+3]
 
       # Calculate torque contribution from Cartesian PD (Equation 5) [Make sure you are using matrix multiplications]
-      # tau += np.zeros(3) # [TODO]
+      # tau += np.zeros(3) # [TODO] - tick
       tau += J_curr.T @ ( kpCartesian @ (leg_xyz - pos_curr) - kdCartesian @ foot_vel )
 
     # Set tau for legi in action vector
@@ -133,7 +136,7 @@ for j in range(TEST_STEPS):
   # send torques to robot and simulate TIME_STEP seconds
   env.step(action)
 
-  # [TODO] save any CPG or robot states
+  # [TODO] save any CPG or robot states - tick
   X[:,:,j] = cpg.X
   for i in range(4):
     J, pos = env.robot.ComputeJacobianAndPosition(i, q[3*i:3*i+3])
@@ -145,7 +148,7 @@ for j in range(TEST_STEPS):
 #####################################################
 # PLOTS
 #####################################################
-# [TODO] Create your plots
+# [TODO] Create your plots - tick
 
 plt.figure()
 for i in range(4):

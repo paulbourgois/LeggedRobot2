@@ -51,14 +51,14 @@ from env.quadruped_gym_env import QuadrupedGymEnv
 
 LEARNING_ALG = "PPO" # or "SAC"
 LOAD_NN = False # if you want to initialize training with a previous model 
-NUM_ENVS = 1    # how many pybullet environments to create for data collection
-USE_GPU = False # make sure to install all necessary drivers 
+NUM_ENVS = 64    # how many pybullet environments to create for data collection
+USE_GPU = True # make sure to install all necessary drivers 
 
 # after implementing, you will want to test how well the agent learns with your MDP: 
-# env_configs = {"motor_control_mode":"CPG",
-#                "task_env": "FWD_LOCOMOTION", #  "LR_COURSE_TASK",
-#                "observation_space_mode": "LR_COURSE_OBS"}
-env_configs = {}
+env_configs = {"motor_control_mode":"CPG",
+               "task_env": "LR_COURSE_TASK", #  "LR_COURSE_TASK",
+               "observation_space_mode": "MINIMAL"}
+# env_configs = {}
 
 if USE_GPU and LEARNING_ALG=="SAC":
     gpu_arg = "auto" 
@@ -74,6 +74,8 @@ if LOAD_NN:
 # directory to save policies and normalization parameters
 SAVE_PATH = './logs/intermediate_models/'+ datetime.now().strftime("%m%d%y%H%M%S") + '/'
 os.makedirs(SAVE_PATH, exist_ok=True)
+TB_LOG = os.path.join(SAVE_PATH, "tb")
+
 
 # checkpoint to save policy network periodically
 checkpoint_callback = CheckpointCallback(save_freq=30000, save_path=SAVE_PATH,name_prefix='rl_model', verbose=2)
@@ -108,10 +110,11 @@ ppo_config = {  "gamma":0.99,
                 "clip_range":0.2, 
                 "clip_range_vf":1,
                 "verbose":1, 
-                "tensorboard_log":None, 
+                "tensorboard_log":TB_LOG, 
                 "_init_setup_model":True, 
                 "policy_kwargs":policy_kwargs,
-                "device": gpu_arg}
+                "device": gpu_arg
+                }
 
 # What are these hyperparameters? Check here: https://stable-baselines3.readthedocs.io/en/master/modules/sac.html
 sac_config={"learning_rate":1e-4,
@@ -144,7 +147,7 @@ if LOAD_NN:
     print("\nLoaded model", model_name, "\n")
 
 # Learn and save (may need to train for longer)
-model.learn(total_timesteps=1000000, log_interval=1,callback=checkpoint_callback)
+model.learn(total_timesteps=1000000, log_interval=1,callback=checkpoint_callback, tb_log_name="ppo_cpg_minimal_0.5")
 
 # Don't forget to save the VecNormalize statistics when saving the agent
 model.save( os.path.join(SAVE_PATH, "rl_model" ) ) 
