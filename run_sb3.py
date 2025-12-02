@@ -41,9 +41,10 @@ from datetime import datetime
 from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
 from stable_baselines3 import PPO, SAC
 from stable_baselines3.common.env_util import make_vec_env
+from stable_baselines3.common.callbacks import CallbackList
 
 # utils
-from utils.utils import CheckpointCallback
+from utils.utils import CheckpointCallback, RewardTermsCallback
 from utils.file_utils import get_latest_model
 
 # gym environment
@@ -54,10 +55,21 @@ LOAD_NN = False # if you want to initialize training with a previous model
 NUM_ENVS = 64    # how many pybullet environments to create for data collection
 USE_GPU = True # make sure to install all necessary drivers 
 
-# after implementing, you will want to test how well the agent learns with your MDP: 
+# after implementing, you will want to test how well the agent learns with your MDP:
+
+# env_configs = {"motor_control_mode":"CPG",
+#                "task_env": "LR_COURSE_TASK",
+#                "observation_space_mode": "MINIMAL"}
+
 env_configs = {"motor_control_mode":"CPG",
-               "task_env": "LR_COURSE_TASK", #  "LR_COURSE_TASK",
-               "observation_space_mode": "MINIMAL"}
+               "task_env": "LR_COURSE_TASK",
+               "observation_space_mode": "MEDIUM"}
+
+
+# env_configs = {"motor_control_mode":"CPG",
+#                "task_env": "LR_COURSE_TASK",
+#                "observation_space_mode": "FULL"}
+
 # env_configs = {}
 
 if USE_GPU and LEARNING_ALG=="SAC":
@@ -67,7 +79,7 @@ else:
 
 if LOAD_NN:
     interm_dir = "./logs/intermediate_models/"
-    log_dir = interm_dir + '' # add path
+    log_dir = interm_dir + '112325112128' # add path
     stats_path = os.path.join(log_dir, "vec_normalize.pkl")
     model_name = get_latest_model(log_dir)
 
@@ -79,6 +91,8 @@ TB_LOG = os.path.join(SAVE_PATH, "tb")
 
 # checkpoint to save policy network periodically
 checkpoint_callback = CheckpointCallback(save_freq=30000, save_path=SAVE_PATH,name_prefix='rl_model', verbose=2)
+reward_tracking_callback = RewardTermsCallback(step_period=2000, rollout_period=4096)
+
 
 # create Vectorized gym environment
 env = lambda: QuadrupedGymEnv(**env_configs)  
@@ -147,7 +161,8 @@ if LOAD_NN:
     print("\nLoaded model", model_name, "\n")
 
 # Learn and save (may need to train for longer)
-model.learn(total_timesteps=1000000, log_interval=1,callback=checkpoint_callback, tb_log_name="ppo_cpg_minimal_0.5")
+callbacks = CallbackList([checkpoint_callback, reward_tracking_callback])
+model.learn(total_timesteps=2000000, log_interval=1,callback=callbacks, tb_log_name="ppo_cpg_medium")
 
 # Don't forget to save the VecNormalize statistics when saving the agent
 model.save( os.path.join(SAVE_PATH, "rl_model" ) ) 

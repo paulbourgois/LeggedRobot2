@@ -350,3 +350,53 @@ def load_rllib_v2(path: str) -> pandas.DataFrame:
     data_frame = pandas.concat(data_frames)
 
     return data_frame, timestep_totals, all_episode_rewards, all_episode_lengths
+
+
+###################################################
+###  Each Reward Term Tracking ####################
+class RewardTermsCallback(BaseCallback):
+    def __init__(self, step_period=2000, rollout_period=4096, **kw):
+        super().__init__(**kw)
+        self.step_period = step_period
+        self.rollout_period = rollout_period
+
+    def _on_step(self) -> bool:
+        infos = self.locals.get("infos", [])
+        t = int(self.num_timesteps)
+
+        # --- episodic logs (only when done) ---
+        for inf in infos:
+            ep = inf.get("episode_terms")
+            if ep:
+                for k, v in ep.items():
+                    self.logger.record(f"reward_terms_ep/{k}", float(v))
+            if "episode_len" in inf:
+                self.logger.record("episode/len", int(inf["episode_len"]))
+
+        # --- step-level logs (throttled) ---
+        if t % self.step_period == 0:
+            step_terms, kine, cpg, act = {}, {}, {}, {}
+            for inf in infos:
+                rt = inf.get("rew_terms")
+                if rt:
+                    for k, v in rt.items():
+                        step_terms.setdefault(k, []).append(float(v))
+                for k in list(inf.keys()):
+                    if k.startswith("kine/"):
+                        kine.setdefault(k, []).append(float(inf[k]))
+                    elif k.startswith("cpg/"):
+                        cpg.setdefault(k, []).append(float(inf[k]))
+                    elif k.startswith("act/"):
+                        act.setdefault(k, []).append(float(inf[k]))
+            import numpy as np
+            for k, vs in step_terms.items():
+                self.logger.record(f"reward_terms_step/{k}", float(np.mean(vs)))
+            for dct in (kine, cpg, act):
+                for k, vs in dct.items():
+                    self.logger.record(k, float(np.mean(vs)))
+
+        # --- per-rollout anchor (optional pretty marker) ---
+        if t % self.rollout_period == 0:
+            self.logger.record("rollout/marker", t)
+
+        return True
