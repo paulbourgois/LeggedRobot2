@@ -116,8 +116,8 @@ MAX_FWD_VELOCITY = 1  # to avoid exploiting simulator dynamics, cap max reward f
 # CPG quantities, matching with ones in hopf_network.py
 MU_LOW = 1
 MU_UPP = 2
-ALPHA =  50
-F_MAX = 10 # actually I just put an arbitrary large number here, i think it does not mater anyway actually -- Nathan
+ALPHA =  150
+F_MAX = 100 # actually I just put an arbitrary large number here, i think it does not mater anyway actually -- Nathan
 
 class QuadrupedGymEnv(gym.Env):
   """The gym environment for a quadruped {Unitree A1}.
@@ -139,6 +139,7 @@ class QuadrupedGymEnv(gym.Env):
       record_video=False,
       add_noise=True,
       terrain=None,
+      terrain_difficulty = 1,
       test_flagrun=False,
       **kwargs): # any extra arguments from legacy
     """Initialize the quadruped gym environment.
@@ -186,26 +187,30 @@ class QuadrupedGymEnv(gym.Env):
     self._test_flagrun = test_flagrun
     self.goal_id = None
     self._terrain = terrain
-    self._terrain_difficulty = 2  # to augment our custom terrain
+    self._terrain_difficulty = terrain_difficulty  # to augment our custom terrain
     if self._add_noise:
       self._observation_noise_stdev = 0.01 #
     else:
       self._observation_noise_stdev = 0.0
 
     self.des_velocity = np.array([1.2, 0, 0])
-    self.vx_max = 1.5
-    self.vy_max = 1.0
-    self.wz_max = 0.5
+    self.vx_max = 1.2
+    self.vx_min = 0.8
+    self.vy_max = 1.2
+    self.vy_min = 0.2
+    self.wz_max = 1.0
 
 
     # reward weights 
     #self.w_vx = 0.75
     #self.w_vy = 0.75
-    self.w_vx = 0.85
-    self.w_vy = 0.85
-    self.w_yaw = 0.5
+    self.w_vx = 1.5
+    self.w_vy = 1.4
+    self.w_yaw = 0.75
     self.w_vz_pen = 2.0
-    self.w_ang_pen = 0.20
+    self.w_ang_pen = 0.4
+    self.w_pos_y_pen = 0.4
+    self.w_ry_pen = 0.4
     self.w_work = 0.001
 
     ### reward terms tracking
@@ -244,14 +249,14 @@ class QuadrupedGymEnv(gym.Env):
   ######################################################################################
   def setupObservationSpace(self):
     """Set up observation space for RL. """
-    observation_high = (np.zeros(20) + OBSERVATION_EPS)
-    observation_low = (np.zeros(20) -  OBSERVATION_EPS)
+    # observation_high = (np.zeros(20) + OBSERVATION_EPS)
+    # observation_low = (np.zeros(20) -  OBSERVATION_EPS)
 
     # Bounds derived from the above (with a small safety margin)
     r_max        = 1.2 * np.sqrt(MU_UPP)
-    rdot_max     = 1.2 * (ALPHA * MU_UPP * r_max)
-    theta_max    = 2.0 * np.pi
-    thetadot_max = 1.2 * (2.0 * np.pi * F_MAX)         
+    rdot_max     = 1.2 * (ALPHA * MU_UPP**2 * r_max)
+    theta_max    = 10 * np.pi
+    thetadot_max = 1.2 * (10 * np.pi * F_MAX)         
 
     contact_high = np.ones(NUM_LEGS) * (1.0 + OBSERVATION_EPS)
     contact_low  = np.zeros(NUM_LEGS) - OBSERVATION_EPS
@@ -270,21 +275,27 @@ class QuadrupedGymEnv(gym.Env):
     thetadot_high = np.ones(NUM_LEGS) * (thetadot_max + OBSERVATION_EPS)
     thetadot_low  = np.zeros(NUM_LEGS) - OBSERVATION_EPS
 
-    desired_vel_high = np.array([self.vx_max, self.vy_max, self.wz_max ]) + OBSERVATION_EPS
-    desired_vel_low = -1 * desired_vel_high - OBSERVATION_EPS
-    vel_high = 2 * desired_vel_high
-    vel_low = 2 * desired_vel_low
-    rpy_high = np.array([np.pi, np.pi/2, np.pi])
-    rpy_low = np.array([np.pi, np.pi/2, np.pi])
+    # desired_vel_high = np.array([self.vx_max, self.vy_max, self.wz_max ]) + OBSERVATION_EPS
+    # desired_vel_low = np.array([self.vx_min, self.vy_min, -self.wz_max ])  - OBSERVATION_EPS
+    desired_vel_high =  np.array([self.vx_max]) + OBSERVATION_EPS
+    desired_vel_low = np.array([self.vx_min]) - OBSERVATION_EPS
+    vel_high = 1.3 * np.array([self.vx_max, self.vy_max, self.wz_max ]) 
+    vel_low = np.array([0.2 * self.vx_min, -self.vy_max, -self.wz_max ])
+    rpy_high = np.array([np.pi/4, np.pi/4, np.pi/4])
+    rpy_low = np.array([-np.pi/4, -np.pi/6, np.pi/4])
 
     rpy_vel_high = 2 * np.ones(3)
     rpy_vel_low = -2 * np.ones(3)
 
     #Joints state and vel
-    joint_angle_high = np.pi * np.ones(NUM_LEGS * 3)
-    joint_angle_low = -np.pi * np.ones(NUM_LEGS * 3)
-    joint_vel_high = np.pi * np.ones(NUM_LEGS * 3)
-    joint_vel_low = -np.pi * np.ones(NUM_LEGS * 3)
+    joint_angle_high = self._robot_config.UPPER_ANGLE_JOINT + OBSERVATION_EPS
+    joint_angle_low = self._robot_config.LOWER_ANGLE_JOINT - OBSERVATION_EPS
+    joint_vel_high = self._robot_config.VELOCITY_LIMITS + OBSERVATION_EPS
+    joint_vel_low = -self._robot_config.VELOCITY_LIMITS - OBSERVATION_EPS
+
+    # cpg actions bound
+    action_lower_bound = -np.ones(8)
+    action_higher_bound = np.ones(8)
 
     
     if self._observation_space_mode == "DEFAULT":
@@ -319,6 +330,7 @@ class QuadrupedGymEnv(gym.Env):
     elif self._observation_space_mode == "FULL":
       observation_high = np.concatenate([
           desired_vel_high, 
+          # action_higher_bound,
           contact_high, 
           r_high, 
           rdot_high, 
@@ -331,7 +343,8 @@ class QuadrupedGymEnv(gym.Env):
           joint_vel_high
       ])
       observation_low = np.concatenate([
-          desired_vel_low, 
+          desired_vel_low,
+          # action_lower_bound,
           contact_low,  
           r_low,  
           rdot_low,  
@@ -410,7 +423,7 @@ class QuadrupedGymEnv(gym.Env):
       linear_vel = self.robot.GetBaseLinearVelocity()
       rpy = self.robot.GetBaseOrientationRollPitchYaw()
       rpy_vel = self.robot.GetBaseAngularVelocity()
-      self._observation = np.concatenate((self.des_velocity,
+      self._observation = np.concatenate((self.des_velocity[0],
                                           contact_bool,
                                           self._cpg.get_r(),
                                           self._cpg.get_theta(),
@@ -439,7 +452,8 @@ class QuadrupedGymEnv(gym.Env):
       rpy_vel = self.robot.GetBaseAngularVelocity()
       joint_state = self.robot.GetMotorAngles()
       joint_vel = self.robot.GetMotorVelocities()
-      self._observation = np.concatenate((self.des_velocity,
+      self._observation = np.concatenate((np.array([self.des_velocity[0]]),
+                                          # self._last_action,
                                           contact_bool,
                                           self._cpg.get_r(),
                                           self._cpg.get_theta(),
@@ -562,7 +576,7 @@ class QuadrupedGymEnv(gym.Env):
 
     return max(reward,0) # keep rewards positive
   
-  def _cpg_rl_tracking_term(self, error, sigma=0.25):
+  def _cpg_rl_tracking_term(self, error, sigma=0.17):
     return float(np.exp(-np.sum(error**2) / sigma))
 
 
@@ -571,6 +585,8 @@ class QuadrupedGymEnv(gym.Env):
     # [TODO] add your reward function. -- tick
     lin_vel_body = self.robot.GetBaseLinearVelocity()
     ang_vel_body = self.robot.GetBaseAngularVelocity()
+    position = self.robot.GetBasePosition()
+    roll, pitch, yaw = self.robot.GetBaseOrientationRollPitchYaw()
 
     vx, vy, vz = lin_vel_body
     w_roll, w_pitch, w_yaw = ang_vel_body
@@ -581,7 +597,9 @@ class QuadrupedGymEnv(gym.Env):
     r_yaw  = self._cpg_rl_tracking_term(wz_des - w_yaw)
 
     r_vz_pen   = -vz**2                     # vertical vel
+    # r_ang_pen  = -(w_roll**2 + w_pitch**2)  # roll/pitch rates
     r_ang_pen  = -(w_roll**2 + w_pitch**2)  # roll/pitch rates
+    r_ry_pen  = -(roll**2 + yaw**2)  # roll/yaw angles
 
     energy_reward = 0
     for tau,vel in zip(self._dt_motor_torques,self._dt_motor_velocities):
@@ -589,32 +607,44 @@ class QuadrupedGymEnv(gym.Env):
 
     reward = (
         self.w_vx * r_vx +
-        self.w_vy * r_vy +
-        self.w_yaw * r_yaw +
+        self.w_pos_y_pen * (np.abs(position[1])) + 
         self.w_vz_pen * r_vz_pen +
-        self.w_ang_pen * r_ang_pen +
+        self.w_ry_pen * r_ry_pen +
         self.w_work * energy_reward
     ) * 0.01
+
+    # reward = (
+    #     self.w_vx * r_vx +
+    #     self.w_pos_y_pen * (np.abs(position[1]) + 
+    #     self.w_vy * r_vy +
+    #     self.w_yaw * r_yaw +
+    #     self.w_vz_pen * r_vz_pen +
+    #     self.w_ang_pen * r_ang_pen +
+    #     self.w_ry_pen * r_ry_pen +
+    #     self.w_work * energy_reward
+    # ) * 0.01
 
 
     ## Just to log these to track the learning
     self._rew_terms_step = {
         "r_vx_raw": float(r_vx),
-        "r_vy_raw": float(r_vy),
-        "r_yaw_raw": float(r_yaw),
-        "r_vz_pen_raw": float(r_vz_pen),
-        "r_ang_pen_raw": float(r_ang_pen),
+        # "r_vy_raw": float(r_vy),
+        # "r_yaw_raw": float(r_yaw),
+        # "r_vz_pen_raw": float(r_vz_pen),
+        # "r_ang_pen_raw": float(r_ang_pen),
         "work_raw": float(energy_reward),
         # weighted contributions:
         "r_vx_w": float(self.w_vx * r_vx * 0.01),
         "r_vy_w": float(self.w_vy * r_vy * 0.01),
-        "r_yaw_w": float(self.w_yaw * r_yaw * 0.01),
+        # "r_yaw_w": float(self.w_yaw * r_yaw * 0.01),
         "r_vz_pen_w": float(self.w_vz_pen * r_vz_pen * 0.01),
-        "r_ang_pen_w": float(self.w_ang_pen * r_ang_pen * 0.01),
+        # "r_ang_pen_w": float(self.w_ang_pen * r_ang_pen * 0.01),
         "work_w": float(self.w_work * energy_reward * 0.01),
     }
-    
+
     return reward
+
+    
 
   def _reward(self):
     """ Get reward depending on task"""
@@ -740,7 +770,8 @@ class QuadrupedGymEnv(gym.Env):
       tau = kp[3*i:3*i+3] * (q_des - q[3*i:3*i+3]) - kd[3*i:3*i+3] * dq[3*i:3*i+3]  # wait but actually we can improve on this, joint_vel_des needs not to be 0
 
       # add Cartesian PD contribution (as you wish)
-      # tau +=
+      # J, pos = self.robot.ComputeJacobianAndPosition(i, q[3*i:3*i+3])
+      # tau += J.T @ (kp[3*i:3*i+3] * (np.array([x,y,z]) - pos))
 
       action[3*i:3*i+3] = tau
 
@@ -806,7 +837,7 @@ class QuadrupedGymEnv(gym.Env):
         "cpg/omega_mean": float(np.mean(self._cpg.get_dtheta())),  # your omega
     })
 
-    print(f"updated info with {len(info.keys())} keys {list(info.keys())}")
+    # print(f"updated info with {len(info.keys())} keys {list(info.keys())}")
 
     # when episode ends, attach episode totals so SB3 Monitor/Callback can log them
     if terminated or truncated:
@@ -827,6 +858,9 @@ class QuadrupedGymEnv(gym.Env):
   ######################################################################################
   # Reset
   ######################################################################################
+  def set_desired_velocity(self, desired_velocity):
+    self.des_velocity = desired_velocity
+
   def reset(self, seed: Optional[float] = None):
     """ Set up simulation environment. """
     mu_min = 0.5
@@ -835,7 +869,7 @@ class QuadrupedGymEnv(gym.Env):
     self.seed(seed)
 
     # resample desired velovity
-    vx = self.np_random.uniform(-self.vx_max, self.vx_max)
+    vx = self.np_random.uniform(self.vx_min, self.vx_max)
     # vy = self.np_random.uniform(-self.vy_max, self.vy_max)
     # wz = self.np_random.uniform(-self.wz_max, self.wz_max)
     self.des_velocity = np.array([vx, 0, 0], dtype=np.float32)
@@ -878,7 +912,8 @@ class QuadrupedGymEnv(gym.Env):
 
       if self._terrain is not None:
         if self._terrain == "SLOPES":
-          self.add_slopes(pitch=0.2)
+          pitch = 0.05 * self._terrain_difficulty
+          self.add_slopes(pitch=pitch)
         elif self._terrain == "STAIRS":
           self.add_stairs(num_stairs=12, stair_height=0.05, stair_width=0.25)
         elif self._terrain == "GAPS":

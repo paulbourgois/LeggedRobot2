@@ -94,6 +94,8 @@ class HopfNetwork():
     self._max_step_len_rl = max_step_len_rl
     if use_RL:
       self.X[0,:] = MU_LOW # mapping MU_LOW=1 to MU_UPP=2
+      self._couple = False
+
 
   def _set_gait(self,gait):
     """ For coupling oscillators in phase space.
@@ -254,10 +256,10 @@ class HopfNetwork():
       r_dot = self._alpha * (self._mu_rl[i] - pow(r,2)) * r 
       # phase (use omega from RL, i.e. self._omega_rl[i]) --tick
       theta_dot = self._omega_rl[i]
-
       X_dot[:,i] = [r_dot, theta_dot]
 
     # integrate
     self.X = X + (X_dot_prev + X_dot) * self._dt / 2
+    # self.X = X + X_dot * self._dt / 2
     self.X_dot = X_dot
     self.X[1,:] = self.X[1,:] % (2*np.pi)

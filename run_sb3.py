@@ -63,14 +63,13 @@ USE_GPU = True # make sure to install all necessary drivers
 
 env_configs = {"motor_control_mode":"CPG",
                "task_env": "LR_COURSE_TASK",
-               "observation_space_mode": "MEDIUM"}
+               "observation_space_mode": "FULL",
+               "terrain": "SLOPES",
+               "terrain_difficulty": 0,               
+               }
 
+tb_log_name = "ppo_cpg_" + env_configs["observation_space_mode"]
 
-# env_configs = {"motor_control_mode":"CPG",
-#                "task_env": "LR_COURSE_TASK",
-#                "observation_space_mode": "FULL"}
-
-# env_configs = {}
 
 if USE_GPU and LEARNING_ALG=="SAC":
     gpu_arg = "auto" 
@@ -79,7 +78,7 @@ else:
 
 if LOAD_NN:
     interm_dir = "./logs/intermediate_models/"
-    log_dir = interm_dir + '112325112128' # add path
+    log_dir = interm_dir + '121325152441' # add path
     stats_path = os.path.join(log_dir, "vec_normalize.pkl")
     model_name = get_latest_model(log_dir)
 
@@ -108,6 +107,7 @@ if LOAD_NN:
 
 # Multi-layer perceptron (MLP) policy of two layers of size _,_ each with tanh activation function
 policy_kwargs = dict(net_arch=[256,256]) # act_fun=tf.nn.tanh
+cpg_policy_kwargs = dict(net_arch=[512, 256, 128]) # act_fun=tf.nn.tanh
 
 # What are these hyperparameters? Check here: https://stable-baselines3.readthedocs.io/en/master/modules/ppo.html
 n_steps = 4096 
@@ -126,7 +126,7 @@ ppo_config = {  "gamma":0.99,
                 "verbose":1, 
                 "tensorboard_log":TB_LOG, 
                 "_init_setup_model":True, 
-                "policy_kwargs":policy_kwargs,
+                "policy_kwargs":cpg_policy_kwargs,
                 "device": gpu_arg
                 }
 
@@ -162,7 +162,7 @@ if LOAD_NN:
 
 # Learn and save (may need to train for longer)
 callbacks = CallbackList([checkpoint_callback, reward_tracking_callback])
-model.learn(total_timesteps=2000000, log_interval=1,callback=callbacks, tb_log_name="ppo_cpg_medium")
+model.learn(total_timesteps=2000000, log_interval=1,callback=callbacks, tb_log_name=tb_log_name)
 
 # Don't forget to save the VecNormalize statistics when saving the agent
 model.save( os.path.join(SAVE_PATH, "rl_model" ) ) 
