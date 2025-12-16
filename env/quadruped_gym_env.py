@@ -275,10 +275,10 @@ class QuadrupedGymEnv(gym.Env):
     thetadot_high = np.ones(NUM_LEGS) * (thetadot_max + OBSERVATION_EPS)
     thetadot_low  = np.zeros(NUM_LEGS) - OBSERVATION_EPS
 
-    # desired_vel_high = np.array([self.vx_max, self.vy_max, self.wz_max ]) + OBSERVATION_EPS
-    # desired_vel_low = np.array([self.vx_min, self.vy_min, -self.wz_max ])  - OBSERVATION_EPS
-    desired_vel_high =  np.array([self.vx_max]) + OBSERVATION_EPS
-    desired_vel_low = np.array([self.vx_min]) - OBSERVATION_EPS
+    desired_vel_high = np.array([self.vx_max, self.vy_max, self.wz_max ]) + OBSERVATION_EPS
+    desired_vel_low = np.array([self.vx_min, self.vy_min, -self.wz_max ])  - OBSERVATION_EPS
+    # desired_vel_high =  np.array([self.vx_max]) + OBSERVATION_EPS
+    # desired_vel_low = np.array([self.vx_min]) - OBSERVATION_EPS
     vel_high = 1.3 * np.array([self.vx_max, self.vy_max, self.wz_max ])
     vel_low = np.array([0.2 * self.vx_min, -self.vy_max, -self.wz_max ])
     rpy_high = np.array([np.pi/4, np.pi/4, np.pi/4])
@@ -452,7 +452,7 @@ class QuadrupedGymEnv(gym.Env):
       rpy_vel = self.robot.GetBaseAngularVelocity()
       joint_state = self.robot.GetMotorAngles()
       joint_vel = self.robot.GetMotorVelocities()
-      self._observation = np.concatenate((np.array([self.des_velocity[0]]),
+      self._observation = np.concatenate((np.array([self.des_velocity]),
                                           # self._last_action,
                                           contact_bool,
                                           self._cpg.get_r(),
