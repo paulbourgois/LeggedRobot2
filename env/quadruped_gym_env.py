@@ -133,7 +133,7 @@ class QuadrupedGymEnv(gym.Env):
       action_repeat=10,
       motor_control_mode="CPG",
       task_env="FWD_LOCOMOTION",
-      observation_space_mode="CPG",
+      observation_space_mode="MINIMAL",
       on_rack=False,
       render=False,
       record_video=True,
@@ -538,9 +538,9 @@ class QuadrupedGymEnv(gym.Env):
       linear_body_vel_penalty_z = - self.robot.GetBaseLinearVelocity()[2]**2  # closer to 0 is better
       angular_body_vel_penalty_x = - np.linalg.norm(np.array([self.robot.GetBaseAngularVelocity()[0], self.robot.GetBaseAngularVelocity()[1]]))**2  # closer to 0 is better
       work_between_steps = - abs(np.dot(np.array(self._dt_motor_torques[-1]), np.array(self._dt_motor_velocities[-1]))) * dt  # negative work is better
+      weight = [0.5, 0.75, 0.5, 2, 0.05, 0.001]
 
-
-      reward = 0.5*dt*linear_body_vel_tracking_x + 0.75*dt*linear_body_vel_tracking_y + 0.5*dt*angular_body_vel_tracking_z + 2*dt*linear_body_vel_penalty_z + 0.05*dt*angular_body_vel_penalty_x + 0.001*dt*work_between_steps
+      reward = weight[0]*dt*linear_body_vel_tracking_x + weight[1]*dt*linear_body_vel_tracking_y + weight[2]*dt*angular_body_vel_tracking_z + weight[3]*dt*linear_body_vel_penalty_z + weight[4]*dt*angular_body_vel_penalty_x + weight[5]*dt*work_between_steps
       return reward
 
   def get_distance_and_angle_to_goal(self):
@@ -587,7 +587,6 @@ class QuadrupedGymEnv(gym.Env):
 
   def _cpg_rl_tracking_term(self, error, sigma=0.17):
     return float(np.exp(-np.sum(error**2) / sigma))
-
 
   def _reward_lr_course(self):
     """ Implement your reward function here. How will you improve upon the above? """
@@ -652,8 +651,6 @@ class QuadrupedGymEnv(gym.Env):
     }
 
     return reward
-
-
 
   def _reward(self):
     """ Get reward depending on task"""
@@ -793,7 +790,7 @@ class QuadrupedGymEnv(gym.Env):
 
     return action
 
-  def step(self, action):
+  def step(self, action, des_vel_x=None):
     """ Step forward the simulation, given the action. """
     curr_act = action.copy()
     # save motor torques and velocities to compute power in reward function
@@ -840,7 +837,30 @@ class QuadrupedGymEnv(gym.Env):
     base_ang = self.robot.GetBaseAngularVelocity()
     _, _, _, contact_bool = self.robot.GetContactInfo()
 
+    if des_vel_x is None:
+        des_vel_x = self.robot.desired_velocity
+
+    dt = self._time_step * self._action_repeat
+
+    linear_body_vel_tracking_x = np.exp(-4 * np.linalg.norm(des_vel_x - self.robot.GetBaseLinearVelocity()[0])**2)        # [0,1]
+    linear_body_vel_tracking_y = np.exp(-4 * np.linalg.norm(0 - self.robot.GetBaseLinearVelocity()[1])**2)        # [0,1]
+    angular_body_vel_tracking_z = np.exp(-1 * np.linalg.norm(0 - self.robot.GetBaseAngularVelocity()[2])**2)        # [0,1]
+    linear_body_vel_penalty_z = - self.robot.GetBaseLinearVelocity()[2]**2  # closer to 0 is better
+    angular_body_vel_penalty_x = - np.linalg.norm(np.array([self.robot.GetBaseAngularVelocity()[0], self.robot.GetBaseAngularVelocity()[1]]))**2  # closer to 0 is better
+    work_between_steps = - abs(np.dot(np.array(self._dt_motor_torques[-1]), np.array(self._dt_motor_velocities[-1]))) * dt  # negative work is better
+    weight = [0.5, 0.75, 0.5, 2, 0.05, 0.001]
+
+    reward = weight[0]*dt*linear_body_vel_tracking_x + weight[1]*dt*linear_body_vel_tracking_y + weight[2]*dt*angular_body_vel_tracking_z + weight[3]*dt*linear_body_vel_penalty_z + weight[4]*dt*angular_body_vel_penalty_x + weight[5]*dt*work_between_steps
+
+
     info.update({
+        "rew/total": float(reward),
+        "rew/linear_body_vel_tracking_x": float(linear_body_vel_tracking_x),
+        "rew/linear_body_vel_tracking_y": float(linear_body_vel_tracking_y),
+        "rew/angular_body_vel_tracking_z": float(angular_body_vel_tracking_z),
+        "rew/linear_body_vel_penalty_z": float(linear_body_vel_penalty_z),
+        "rew/angular_body_vel_penalty_x": float(angular_body_vel_penalty_x),
+        "rew/work_between_steps": float(work_between_steps),
         "rew_terms": dict(self._rew_terms_step),     # per-step
         "kine/vx": float(base_lin[0]),
         "kine/vy": float(base_lin[1]),
@@ -889,6 +909,7 @@ class QuadrupedGymEnv(gym.Env):
     # vy = self.np_random.uniform(-self.vy_max, self.vy_max)
     # wz = self.np_random.uniform(-self.wz_max, self.wz_max)
     self.des_velocity = np.array([vx, 0, 0], dtype=np.float32)
+    print("Desired velocity:", self.des_velocity)
 
     # Disable rendering when setting up models (otherwise too slow)
     if self._is_render:

@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: Copyright (c) 2022 Guillaume Bellegarda. All rights reserved.
 # SPDX-License-Identifier: BSD-3-Clause
-# 
+#
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted provided that the following conditions are met:
 #
@@ -42,7 +42,7 @@ from stable_baselines3.common.callbacks import BaseCallback
 # matplotlib.use('TkAgg')  # Can change to 'Agg' for non-interactive mode
 plt.rcParams['svg.fonttype'] = 'none'
 
-np.set_printoptions(edgeitems=30, linewidth=100000, 
+np.set_printoptions(edgeitems=30, linewidth=100000,
     formatter=dict(float=lambda x: "%.3g" % x))
 
 """ utils.py - general utilities """
@@ -77,7 +77,7 @@ class CheckpointCallback(BaseCallback):
             if self.verbose > 1:
                 print("Saving model checkpoint to {}".format(path))
 
-        if self.n_calls % 500 == 0: # self.save_freq < 10000 and 
+        if self.n_calls % 500 == 0: # self.save_freq < 10000 and
             # also print out path periodically for off-policy aglorithms: SAC, TD3, etc.
             print('=================================== Save path is {}'.format(self.save_path))
         return True
@@ -257,15 +257,15 @@ def load_rllib(path: str) -> pandas.DataFrame:
         plt.title('Episode length')
         plt.show()
 
-    try: 
-        with open(result_file, 'rt') as file_handler: 
+    try:
+        with open(result_file, 'rt') as file_handler:
             # result.json, check it out
             all_episode_lengths = []
             all_episode_rewards = []
             timestep_totals = []
             # read in data
             line = file_handler.readline()
-            while line: 
+            while line:
                 ep_data = json.loads(line)
 
                 eplens = ep_data['hist_stats']['episode_lengths']
@@ -282,17 +282,17 @@ def load_rllib(path: str) -> pandas.DataFrame:
                 line = file_handler.readline()
 
             plt.scatter(timestep_totals, all_episode_rewards, s=2)
-            x, y_mean = window_func(np.array(timestep_totals), 
-                                    np.array(all_episode_rewards), 
-                                    EPISODES_WINDOW, 
+            x, y_mean = window_func(np.array(timestep_totals),
+                                    np.array(all_episode_rewards),
+                                    EPISODES_WINDOW,
                                     np.mean)
             plt.plot(x, y_mean, color='red')
             plt.title('Episode Rewards')
             plt.show()
             plt.scatter(timestep_totals, all_episode_lengths, s=2)
-            x, y_mean = window_func(np.array(timestep_totals), 
-                                    np.array(all_episode_lengths), 
-                                    EPISODES_WINDOW, 
+            x, y_mean = window_func(np.array(timestep_totals),
+                                    np.array(all_episode_lengths),
+                                    EPISODES_WINDOW,
                                     np.mean)
             plt.plot(x, y_mean, color='red')
             plt.title('All Episode Lengths')
@@ -308,7 +308,7 @@ def load_rllib(path: str) -> pandas.DataFrame:
 
 def load_rllib_v2(path: str) -> pandas.DataFrame:
     """
-    Load progress.csv and result.json file, for 1 of several 
+    Load progress.csv and result.json file, for 1 of several
 
     :param path: (str) the directory path containing the log file(s)
     :return: (pandas.DataFrame) the logged data
@@ -323,14 +323,14 @@ def load_rllib_v2(path: str) -> pandas.DataFrame:
     with open(progress_file, 'rt') as file_handler:
         data_frame = pandas.read_csv(file_handler, index_col=None)
 
-    with open(result_file, 'rt') as file_handler: 
+    with open(result_file, 'rt') as file_handler:
         # result.json, check it out
         all_episode_lengths = []
         all_episode_rewards = []
         timestep_totals = []
         # read in data
         line = file_handler.readline()
-        while line: 
+        while line:
             ep_data = json.loads(line)
 
             eplens = ep_data['hist_stats']['episode_lengths']
@@ -388,6 +388,8 @@ class RewardTermsCallback(BaseCallback):
                         cpg.setdefault(k, []).append(float(inf[k]))
                     elif k.startswith("act/"):
                         act.setdefault(k, []).append(float(inf[k]))
+                    elif k.startswith("rew/"):
+                        step_terms.setdefault(k, []).append(float(inf[k]))
             import numpy as np
             for k, vs in step_terms.items():
                 self.logger.record(f"reward_terms_step/{k}", float(np.mean(vs)))

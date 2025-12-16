@@ -53,10 +53,7 @@ from utils.file_utils import get_latest_model
 from env.quadruped_gym_env import QuadrupedGymEnv
 
 LEARNING_ALG = "PPO" # or "SAC"
-LOAD_NN = False # if you want to initialize training with a previous model
-NUM_ENVS = 64    # how many pybullet environments to create for data collection
-USE_GPU = False # make sure to install all necessary drivers
-LOAD_NN = False # if you want to initialize training with a previous model
+LOAD_NN = True # if you want to initialize training with a previous model
 NUM_ENVS = 64    # how many pybullet environments to create for data collection
 USE_GPU = True # make sure to install all necessary drivers
 
@@ -66,11 +63,16 @@ USE_GPU = True # make sure to install all necessary drivers
 #                "task_env": "LR_COURSE_TASK",
 #                "observation_space_mode": "MINIMAL"}
 
+# env_configs = {"motor_control_mode":"CPG",
+#                "task_env": "LR_COURSE_TASK",
+#                "observation_space_mode": "FULL",
+#                "terrain": "SLOPES",
+#                "terrain_difficulty": 0,
+#                }
+
 env_configs = {"motor_control_mode":"CPG",
-               "task_env": "LR_COURSE_TASK",
-               "observation_space_mode": "FULL",
-               "terrain": "SLOPES",
-               "terrain_difficulty": 0,
+               "task_env": "FWD_LOCOMOTION_CPG",
+               "observation_space_mode": "FULL"
                }
 
 tb_log_name = "ppo_cpg_" + env_configs["observation_space_mode"]
@@ -83,7 +85,7 @@ else:
 
 if LOAD_NN:
     interm_dir = "./logs/intermediate_models/"
-    log_dir = interm_dir + '121325152441' # add path
+    log_dir = interm_dir + '121625104741' # add path
     stats_path = os.path.join(log_dir, "vec_normalize.pkl")
     model_name = get_latest_model(log_dir)
 
