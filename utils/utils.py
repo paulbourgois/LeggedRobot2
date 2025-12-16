@@ -375,7 +375,7 @@ class RewardTermsCallback(BaseCallback):
 
         # --- step-level logs (throttled) ---
         if t % self.step_period == 0:
-            step_terms, kine, cpg, act = {}, {}, {}, {}
+            step_terms, kine, cpg, act, cmd = {}, {}, {}, {}, {}
             for inf in infos:
                 rt = inf.get("rew_terms")
                 if rt:
@@ -388,10 +388,12 @@ class RewardTermsCallback(BaseCallback):
                         cpg.setdefault(k, []).append(float(inf[k]))
                     elif k.startswith("act/"):
                         act.setdefault(k, []).append(float(inf[k]))
+                    elif (k.startswith("cmd/") or k.startswith("err/")):
+                        cmd.setdefault(k, []).append(float(inf[k]))
             import numpy as np
             for k, vs in step_terms.items():
                 self.logger.record(f"reward_terms_step/{k}", float(np.mean(vs)))
-            for dct in (kine, cpg, act):
+            for dct in (kine, cpg, act, cmd):
                 for k, vs in dct.items():
                     self.logger.record(k, float(np.mean(vs)))
 

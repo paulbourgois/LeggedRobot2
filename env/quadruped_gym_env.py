@@ -116,7 +116,7 @@ MAX_FWD_VELOCITY = 1  # to avoid exploiting simulator dynamics, cap max reward f
 # CPG quantities, matching with ones in hopf_network.py
 MU_LOW = 1
 MU_UPP = 2
-ALPHA =  150
+ALPHA =  50
 F_MAX = 100 # actually I just put an arbitrary large number here, i think it does not mater anyway actually -- Nathan
 
 class QuadrupedGymEnv(gym.Env):
@@ -194,8 +194,8 @@ class QuadrupedGymEnv(gym.Env):
       self._observation_noise_stdev = 0.0
 
     self.des_velocity = np.array([1.2, 0, 0])
-    self.vx_max = 1.2
-    self.vx_min = 0.8
+    self.vx_max = 0.8
+    self.vx_min = 0.5
     self.vy_max = 1.2
     self.vy_min = 0.2
     self.wz_max = 1.0
@@ -578,6 +578,82 @@ class QuadrupedGymEnv(gym.Env):
   
   def _cpg_rl_tracking_term(self, error, sigma=0.17):
     return float(np.exp(-np.sum(error**2) / sigma))
+  
+  def _reward_lr_course_full(self):
+    # --- state ---
+    vx, vy, vz = self.robot.GetBaseLinearVelocity()
+    wx, wy, wz = self.robot.GetBaseAngularVelocity()
+    roll, pitch, yaw = self.robot.GetBaseOrientationRollPitchYaw()
+    position = self.robot.GetBasePosition()
+
+    vx_des, vy_des, wz_des = self.des_velocity
+
+    # --- tracking rewards (0..1) ---
+    k_v = 2.0
+    k_w = 1.0
+    r_vx = float(np.exp(-k_v * (vx - vx_des)**2))
+    r_vy = float(np.exp(-k_v * (vy - vy_des)**2))
+    r_wz = float(np.exp(-k_w * (wz - wz_des)**2))
+
+    # --- slope-safe stability ---
+    # A) penalize roll strongly, pitch relative to reference (not to 0)
+    pitch_ref = float(np.clip(0.6 * np.arctan2(vz, max(abs(vx), 1e-3)), -0.35, 0.35))
+    p_roll = float(roll * roll)
+    p_pitch_err = float((pitch - pitch_ref) * (pitch - pitch_ref))
+
+    # B) penalize vertical bounce and lateral drift
+    p_z_vel = float(vz * vz)
+    p_y_dev = float(position[1] * position[1])
+
+    # C) penalize big angular rates (very important for “slap” instability)
+    p_ang_rate = float(wx*wx + wy*wy)  # roll/pitch rates
+
+    # --- energy (positive work) ---
+    energy = 0.0
+    for tau, vel in zip(self._dt_motor_torques, self._dt_motor_velocities):
+        energy += float(np.abs(np.dot(tau, vel)) * self._time_step)
+
+    # --- weights ---
+    w_vx, w_vy, w_wz = 1.0, 1.0, 0.3
+    w_ydev = 0.2
+    w_zvel = 0.2
+    w_roll = 0.8
+    w_pitch = 0.3         # pitch error to pitch_ref
+    w_ang_rate = 0.05
+    w_energy = 0.0005
+
+    # --- weighted contributions (signed) ---
+    wterms = {
+        "r_vx": w_vx * r_vx,
+        "r_vy": w_vy * r_vy,
+        "r_wz": w_wz * r_wz,
+
+        "p_y_dev": -w_ydev * p_y_dev,
+        "p_z_vel": -w_zvel * p_z_vel,
+        "p_roll":  -w_roll * p_roll,
+        "p_pitch_err": -w_pitch * p_pitch_err,
+        "p_ang_rate": -w_ang_rate * p_ang_rate,
+
+        "energy": -w_energy * energy,
+    }
+
+    reward = float(sum(wterms.values()))
+
+    # --- logging: raw + weighted ---
+    self._rew_terms_raw = {
+        "r_vx": r_vx, "r_vy": r_vy, "r_wz": r_wz,
+        "p_y_dev": p_y_dev, "p_z_vel": p_z_vel,
+        "p_roll": p_roll, "p_pitch_err": p_pitch_err, "p_ang_rate": p_ang_rate,
+        "energy": energy,
+        "pitch_ref": pitch_ref,
+    }
+    self._rew_terms_w = {k: float(v) for k, v in wterms.items()}
+
+    # if your callback expects this key:
+    self._rew_terms_step = dict(self._rew_terms_w)
+    self._rew_terms_step["reward"] = reward
+
+    return reward
 
 
   def _reward_lr_course(self):
@@ -605,24 +681,24 @@ class QuadrupedGymEnv(gym.Env):
     for tau,vel in zip(self._dt_motor_torques,self._dt_motor_velocities):
       energy_reward += np.abs(np.dot(tau,vel)) * self._time_step
 
-    reward = (
-        self.w_vx * r_vx +
-        self.w_pos_y_pen * (np.abs(position[1])) + 
-        self.w_vz_pen * r_vz_pen +
-        self.w_ry_pen * r_ry_pen +
-        self.w_work * energy_reward
-    ) * 0.01
-
     # reward = (
     #     self.w_vx * r_vx +
-    #     self.w_pos_y_pen * (np.abs(position[1]) + 
-    #     self.w_vy * r_vy +
-    #     self.w_yaw * r_yaw +
+    #     self.w_pos_y_pen * (np.abs(position[1])) + 
     #     self.w_vz_pen * r_vz_pen +
-    #     self.w_ang_pen * r_ang_pen +
     #     self.w_ry_pen * r_ry_pen +
     #     self.w_work * energy_reward
     # ) * 0.01
+
+    reward = (
+        self.w_vx * r_vx +
+        self.w_pos_y_pen * (np.abs(position[1])) + 
+        self.w_vy * r_vy +
+        self.w_yaw * r_yaw +
+        self.w_vz_pen * r_vz_pen +
+        self.w_ang_pen * r_ang_pen +
+        self.w_ry_pen * r_ry_pen +
+        self.w_work * energy_reward
+    ) * 0.01
 
 
     ## Just to log these to track the learning
@@ -635,7 +711,7 @@ class QuadrupedGymEnv(gym.Env):
         "work_raw": float(energy_reward),
         # weighted contributions:
         "r_vx_w": float(self.w_vx * r_vx * 0.01),
-        "r_vy_w": float(self.w_vy * r_vy * 0.01),
+        # "r_vy_w": float(self.w_vy * r_vy * 0.01),
         # "r_yaw_w": float(self.w_yaw * r_yaw * 0.01),
         "r_vz_pen_w": float(self.w_vz_pen * r_vz_pen * 0.01),
         # "r_ang_pen_w": float(self.w_ang_pen * r_ang_pen * 0.01),
@@ -651,7 +727,7 @@ class QuadrupedGymEnv(gym.Env):
     if self._TASK_ENV == "FWD_LOCOMOTION":
       return self._reward_fwd_locomotion()
     elif self._TASK_ENV == "LR_COURSE_TASK":
-      return self._reward_lr_course()
+      return self._reward_lr_course_full()
     elif self._TASK_ENV == "FLAGRUN":
       return self._reward_flag_run()
     else:
@@ -780,6 +856,7 @@ class QuadrupedGymEnv(gym.Env):
   def step(self, action):
     """ Step forward the simulation, given the action. """
     curr_act = action.copy()
+
     # save motor torques and velocities to compute power in reward function
     self._dt_motor_torques = []
     self._dt_motor_velocities = []
@@ -810,50 +887,94 @@ class QuadrupedGymEnv(gym.Env):
     # accumulate episode stats
     self._ep_len += 1
     if self._rew_terms_step:
-        for k, v in self._rew_terms_step.items():
-            self._rew_terms_ep[k] = self._rew_terms_ep.get(k, 0.0) + v
+      for k, v in self._rew_terms_step.items():
+        self._rew_terms_ep[k] = self._rew_terms_ep.get(k, 0.0) + v
 
     terminated = self._termination()
     truncated = truncated or (self.get_sim_time() > self._MAX_EP_LEN and not self._test_flagrun)
 
-    info = self._get_info()
+    # --- episode accumulators ---
+    # Make sure these exist (init them in reset ideally)
+    if not hasattr(self, "_ep_len"):
+      self._ep_len = 0
+    if not hasattr(self, "_ep_return"):
+      self._ep_return = 0.0
+    if not hasattr(self, "_rew_terms_ep"):
+      self._rew_terms_ep = {}
 
-    # always attach instantaneous telemetry (so callbacks can stream scalars)
-    # suggested extra diagnostics:
+    self._ep_len += 1
+    self._ep_return += reward
+
+    # accumulate weighted contributions (includes reward)
+    if getattr(self, "_rew_terms_step", None):
+      for k, v in self._rew_terms_step.items():
+        self._rew_terms_ep[k] = self._rew_terms_ep.get(k, 0.0) + float(v)
+
+    # --- info payload ---
+    info = self._get_info()
     base_lin = self.robot.GetBaseLinearVelocity()
     base_ang = self.robot.GetBaseAngularVelocity()
+    roll, pitch, yaw = self.robot.GetBaseOrientationRollPitchYaw()
+    pos = self.robot.GetBasePosition()
     _, _, _, contact_bool = self.robot.GetContactInfo()
 
+    vx_des, vy_des, wz_des = self.des_velocity
     info.update({
-        "rew_terms": dict(self._rew_terms_step),     # per-step
-        "kine/vx": float(base_lin[0]),
-        "kine/vy": float(base_lin[1]),
-        "kine/vz": float(base_lin[2]),
-        "kine/w_roll": float(base_ang[0]),
-        "kine/w_pitch": float(base_ang[1]),
-        "kine/w_yaw": float(base_ang[2]),
-        "contacts/num_in_contact": int(np.sum(contact_bool)),
-        "cpg/r_mean": float(np.mean(self._cpg.get_r())),
-        "cpg/omega_mean": float(np.mean(self._cpg.get_dtheta())),  # your omega
+      "cmd/vx": float(vx_des),
+      "cmd/vy": float(vy_des),
+      "cmd/wz": float(wz_des),
+      "err/vx": float(base_lin[0] - vx_des),
+      "err/vy": float(base_lin[1] - vy_des),
+      "err/wz": float(base_ang[2] - wz_des),
     })
 
-    # print(f"updated info with {len(info.keys())} keys {list(info.keys())}")
+    # per-step reward terms (YOUR CALLBACK READS rew_terms)
+    # Add termination flags INSIDE rew_terms so callback logs them too.
+    rew_terms = dict(getattr(self, "_rew_terms_step", {}))
+    rew_terms["term/terminated"] = float(terminated)
+    rew_terms["term/truncated"]  = float(truncated)
+    info.update({
+      "rew_terms": rew_terms,
 
-    # when episode ends, attach episode totals so SB3 Monitor/Callback can log them
+      "kine/vx": float(base_lin[0]),
+      "kine/vy": float(base_lin[1]),
+      "kine/vz": float(base_lin[2]),
+      "kine/w_roll": float(base_ang[0]),
+      "kine/w_pitch": float(base_ang[1]),
+      "kine/w_yaw": float(base_ang[2]),
+      "kine/roll": float(roll),
+      "kine/pitch": float(pitch),
+      "kine/base_z": float(pos[2]),
+      "kine/y_dev": float(pos[1]),
+
+      "contacts/num_in_contact": int(np.sum(contact_bool)),
+      "cpg/r_mean": float(np.mean(self._cpg.get_r())),
+      "cpg/omega_mean": float(np.mean(self._cpg.get_dtheta())),
+    })
+
+    # episode end: attach MEANS (not sums) so they are comparable across episode lengths
     if terminated or truncated:
-        info["episode_terms"] = dict(self._rew_terms_ep)  # episodic sums of weighted terms
-        info["episode_len"] = self._ep_len
-        # reset accumulators for the next episode
-        self._rew_terms_ep = {}
-        self._ep_len = 0
+      L = max(self._ep_len, 1)
+
+      # mean per-step episode terms
+      ep_terms_mean = {k: float(v / L) for k, v in self._rew_terms_ep.items()}
+      ep_terms_mean["episode_return"] = float(self._ep_return)
+
+      info["episode_terms"] = ep_terms_mean
+      info["episode_len"] = int(self._ep_len)
+
+      # reset accumulators
+      self._rew_terms_ep = {}
+      self._ep_len = 0
+      self._ep_return = 0.0
 
     if "FLAGRUN" in self._TASK_ENV:
       dist_to_goal, _ = self.get_distance_and_angle_to_goal()
-
       if dist_to_goal < 0.5:
-        self._reset_goal()
+          self._reset_goal()
 
     return np.array(self._noisy_observation()), reward, terminated, truncated, info
+
 
   ######################################################################################
   # Reset
