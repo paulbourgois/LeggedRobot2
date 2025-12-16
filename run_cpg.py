@@ -193,6 +193,11 @@ plt.legend()
 plt.grid()
 plt.show()
 
+
+print('==============================================================')
+print('CPG Test Summary:')
+print('mean error in foot position (m):', np.mean(np.abs(foot_pos_desired - foot_pos_current)), '\n')
+print('==============================================================')
 #  plot comparing the desired joint angles vs actual joint angles using joint PD with/without Cartesian PD (for one leg is fine).
 plt.figure(figsize=(10,6))
 for joint in range(3):
