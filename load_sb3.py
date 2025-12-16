@@ -58,11 +58,18 @@ from utils.file_utils import get_latest_model, load_all_results
 LEARNING_ALG = "PPO" #"SAC"
 interm_dir = "./logs/intermediate_models/"
 # path to saved models, i.e. interm_dir + '102824115106'
-log_dir = interm_dir + '121425153909' # change to your desired folder
+# log_dir = interm_dir + '120625210952'
+log_dir = interm_dir + '121325194532'
 
 # initialize env configs (render at test time)
 # check ideal conditions, as well as robustness to UNSEEN noise during training
 env_config = {}
+
+env_config["motor_control_mode"] = "CPG"
+env_config["task_env"] = "LR_COURSE_TASK" #  "LR_COURSE_TASK",
+env_config["terrain"] = None #  "LR_COURSE_TASK",
+env_config["terrain_difficulty"] = 2 #  "LR_COURSE_TASK",
+env_config["observation_space_mode"] = "FULL"
 env_config['render'] = True
 env_config['record_video'] = True
 env_config['add_noise'] = False
@@ -95,10 +102,11 @@ print("\nLoaded model", model_name, "\n")
 obs = env.reset()
 episode_reward = 0
 
+desire_vel = np.array([1.0, 0, 0])
+env.set_desired_velocity(desire_vel)
 # [TODO] initialize arrays to save data from simulation
-EP_REW = np.zeros(2000)
 
-for i in range(2000):
+for i in range(5000):
     action, _states = model.predict(obs,deterministic=False) # sample at test time? ([TODO]: test if the outputs make sense)
     obs, rewards, dones, info = env.step(action)
     episode_reward += rewards

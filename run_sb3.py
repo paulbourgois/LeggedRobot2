@@ -43,9 +43,10 @@ from datetime import datetime
 from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
 from stable_baselines3 import PPO, SAC
 from stable_baselines3.common.env_util import make_vec_env
+from stable_baselines3.common.callbacks import CallbackList
 
 # utils
-from utils.utils import CheckpointCallback
+from utils.utils import CheckpointCallback, RewardTermsCallback
 from utils.file_utils import get_latest_model
 
 # gym environment
@@ -55,12 +56,25 @@ LEARNING_ALG = "PPO" # or "SAC"
 LOAD_NN = False # if you want to initialize training with a previous model
 NUM_ENVS = 64    # how many pybullet environments to create for data collection
 USE_GPU = False # make sure to install all necessary drivers
+LOAD_NN = False # if you want to initialize training with a previous model
+NUM_ENVS = 64    # how many pybullet environments to create for data collection
+USE_GPU = True # make sure to install all necessary drivers
 
 # after implementing, you will want to test how well the agent learns with your MDP:
+
+# env_configs = {"motor_control_mode":"CPG",
+#                "task_env": "LR_COURSE_TASK",
+#                "observation_space_mode": "MINIMAL"}
+
 env_configs = {"motor_control_mode":"CPG",
-               "task_env": "FWD_LOCOMOTION_CPG", #  "LR_COURSE_TASK",
-               "observation_space_mode": "CPG_small"}
-# env_configs = {}
+               "task_env": "LR_COURSE_TASK",
+               "observation_space_mode": "FULL",
+               "terrain": "SLOPES",
+               "terrain_difficulty": 0,
+               }
+
+tb_log_name = "ppo_cpg_" + env_configs["observation_space_mode"]
+
 
 if USE_GPU and LEARNING_ALG=="SAC":
     gpu_arg = "auto"
@@ -69,7 +83,7 @@ else:
 
 if LOAD_NN:
     interm_dir = "./logs/intermediate_models/"
-    log_dir = interm_dir + '120225155749' # add path
+    log_dir = interm_dir + '121325152441' # add path
     stats_path = os.path.join(log_dir, "vec_normalize.pkl")
     model_name = get_latest_model(log_dir)
 
@@ -78,8 +92,11 @@ SAVE_PATH = './logs/intermediate_models/'+ datetime.now().strftime("%m%d%y%H%M%S
 os.makedirs(SAVE_PATH, exist_ok=True)
 TB_LOG = os.path.join(SAVE_PATH, "tb")
 
+
 # checkpoint to save policy network periodically
 checkpoint_callback = CheckpointCallback(save_freq=30000, save_path=SAVE_PATH,name_prefix='rl_model', verbose=2)
+reward_tracking_callback = RewardTermsCallback(step_period=2000, rollout_period=4096)
+
 
 # create Vectorized gym environment
 env = lambda: QuadrupedGymEnv(**env_configs)
@@ -95,6 +112,7 @@ if LOAD_NN:
 
 # Multi-layer perceptron (MLP) policy of two layers of size _,_ each with tanh activation function
 policy_kwargs = dict(net_arch=[256,256]) # act_fun=tf.nn.tanh
+cpg_policy_kwargs = dict(net_arch=[512, 256, 128]) # act_fun=tf.nn.tanh
 
 # What are these hyperparameters? Check here: https://stable-baselines3.readthedocs.io/en/master/modules/ppo.html
 n_steps = 4096
@@ -113,8 +131,9 @@ ppo_config = {  "gamma":0.99,
                 "verbose":1,
                 "tensorboard_log":TB_LOG,
                 "_init_setup_model":True,
-                "policy_kwargs":policy_kwargs,
-                "device": gpu_arg}
+                "policy_kwargs":cpg_policy_kwargs,
+                "device": gpu_arg
+                }
 
 # What are these hyperparameters? Check here: https://stable-baselines3.readthedocs.io/en/master/modules/sac.html
 sac_config={"learning_rate":1e-4,
@@ -147,8 +166,9 @@ if LOAD_NN:
     print("\nLoaded model", model_name, "\n")
 
 # Learn and save (may need to train for longer)
-# model.learn(total_timesteps=1000000, log_interval=1,callback=checkpoint_callback)
-model.learn(total_timesteps=5000000, log_interval=1, callback=checkpoint_callback, tb_log_name=LEARNING_ALG)
+callbacks = CallbackList([checkpoint_callback, reward_tracking_callback])
+model.learn(total_timesteps=2000000, log_interval=1,callback=callbacks, tb_log_name=tb_log_name)
+
 # Don't forget to save the VecNormalize statistics when saving the agent
 model.save( os.path.join(SAVE_PATH, "rl_model" ) )
 env.save(os.path.join(SAVE_PATH, "vec_normalize.pkl" ))
