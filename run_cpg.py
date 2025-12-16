@@ -63,14 +63,15 @@ env = QuadrupedGymEnv(render=True,              # visualize
 # initialize Hopf Network, supply gait
 cpg = HopfNetwork(time_step=TIME_STEP)
 
-TEST_STEPS = int(10 / (TIME_STEP))
+TEST_STEPS = int(2 / (TIME_STEP))
 t = np.arange(TEST_STEPS)*TIME_STEP
 
 # [TODO] initialize data structures to save CPG and robot states
 X = np.zeros((2,4,TEST_STEPS)) # CPG states
-cartesian_pos = np.zeros((4,3,TEST_STEPS)) # foot positions
-joint_pos = np.zeros((12,TEST_STEPS)) # joint angles
-
+joint_pos_current = np.zeros((12,TEST_STEPS)) # joint angles
+joint_pos_desired = np.zeros((12,TEST_STEPS)) # desired joint angles
+foot_pos_desired = np.zeros((4,3,TEST_STEPS)) # desired foot positions
+foot_pos_current = np.zeros((4,3,TEST_STEPS)) # current foot positions
 
 ############## Sample Gains
 # joint PD gains
@@ -99,10 +100,12 @@ for j in range(TEST_STEPS):
 
     # get desired foot i pos (xi, yi, zi) in leg frame
     leg_xyz = np.array([xs[i], sideSign[i] * foot_y, zs[i]])
+    foot_pos_desired[i,:,j] = leg_xyz
 
     # call inverse kinematics to get corresponding joint angles (see ComputeInverseKinematics() in quadruped.py)
     leg_q = np.zeros(3) # [TODO]
     leg_q = env.robot.ComputeInverseKinematics(i, leg_xyz)
+    joint_pos_desired[3*i:3*i+3,j] = leg_q
 
     """ No VMC ? No Gravity Compensation ? Just joint PD and cartesian PD ?"""
 
@@ -118,7 +121,7 @@ for j in range(TEST_STEPS):
       # Get current Jacobian and foot position in leg frame (see ComputeJacobianAndPosition() in quadruped.py)
       # [TODO]
       J_curr, pos_curr = env.robot.ComputeJacobianAndPosition(i, q[3*i:3*i+3])
-
+      foot_pos_current[i,:,j] = pos_curr
       # Get current foot velocity in leg frame (Equation 2)
       # [TODO]
       foot_vel = J @ dq[3*i:3*i+3]
@@ -137,8 +140,8 @@ for j in range(TEST_STEPS):
   X[:,:,j] = cpg.X
   for i in range(4):
     J, pos = env.robot.ComputeJacobianAndPosition(i, q[3*i:3*i+3])
-    cartesian_pos[i,:,j] = pos
-    joint_pos[:,j] = q
+    foot_pos_current[i,:,j] = pos
+    joint_pos_current[:,j] = q
 # end of simulation loop
 
 
@@ -147,22 +150,78 @@ for j in range(TEST_STEPS):
 #####################################################
 # [TODO] Create your plots
 
-plt.figure()
+# A plot of the CPG states (r, θ, ˙r, ˙θ) for a trot gait (plots for other gaits are encouraged, but not required). We suggest making subplots for each leg, and make sure these are at a scale where the states are clearly visible (for example 2 gait cycles).
+r = np.sqrt(X[0,:,:])
+theta = X[1,:,:]
+r_dot = np.zeros_like(r)
+theta_dot = np.zeros_like(theta)
 for i in range(4):
-  plt.plot(t, X[0,i,:], label=f'Leg {i} r')
-plt.title('CPG Amplitudes')
-plt.xlabel('Time (s)')
-plt.ylabel('r')
-plt.legend()
-plt.grid()
+  r_dot[i,:] = np.gradient(r[i,:], TIME_STEP)
+  theta_dot[i,:] = np.gradient(theta[i,:], TIME_STEP)
+  # correct for numerical issues when theta wraps around 2pi then derivative is very large
+  # if theta_dot is discontinuous, set to previous value
+  for j in range(1, TEST_STEPS):
+    if abs(theta_dot[i,j] - theta_dot[i,j-1]) > 20:
+      theta_dot[i,j] = theta_dot[i,j-1]
 
-plt.figure()
-for i in range(4):
-  plt.plot(t, X[1,i,:], label=f'Leg {i} theta')
-plt.title('CPG Phases')
-plt.xlabel('Time (s)')
-plt.ylabel('theta (rad)')
+
+# # Plot CPG states
+# plt.figure(figsize=(10,8))
+# for i in range(4):
+#   plt.subplot(2,2,i+1)
+#   plt.plot(t, r[i,:], label='r', color='b')
+#   plt.plot(t, theta[i,:], label='theta (rad)', color='r')
+#   plt.plot(t, r_dot[i,:], label='r dot', color='g')
+#   plt.plot(t, theta_dot[i,:], label='theta dot (rad/s)', color='m')
+#   plt.title(f'Leg {i} CPG States')
+#   plt.xlabel('Time (s)')
+#   plt.ylabel('States')
+#   plt.legend()
+#   plt.grid()
+# plt.tight_layout()
+# plt.show()
+
+# plot comparing the desired foot position vs actual foot position using joint PD with/without Cartesian PD (for one leg is fine)
+leg_to_plot = 0
+plt.figure(figsize=(10,6))
+plt.subplot(3,1,1)
+plt.plot(t, foot_pos_desired[leg_to_plot,0,:], label='Desired X', linestyle='--')
+plt.plot(t, foot_pos_current[leg_to_plot,0,:], label='Actual X', linestyle='-')
+plt.title(f'Leg {leg_to_plot} Foot Position: Desired vs Actual')
+plt.ylabel('X Position (m)')
 plt.legend()
 plt.grid()
+plt.show()
+
+#  plot comparing the desired joint angles vs actual joint angles using joint PD with/without Cartesian PD (for one leg is fine).
+plt.figure(figsize=(10,6))
+for joint in range(3):
+  plt.subplot(3,1,joint+1)
+  plt.plot(t, joint_pos_desired[3*leg_to_plot + joint,:], label=f'Desired Joint {joint} Angle', linestyle='--')
+  plt.plot(t, joint_pos_current[3*leg_to_plot + joint,:], label=f'Actual Joint {joint} Angle', linestyle='-')
+  plt.title(f'Leg {leg_to_plot} Joint {joint} Angle over Time')
+  plt.ylabel('Angle (rad)')
+  plt.legend()
+  plt.grid()
 
 plt.show()
+
+# plt.figure()
+# for i in range(4):
+#   plt.plot(t, X[0,i,:], label=f'Leg {i} r')
+# plt.title('CPG Amplitudes')
+# plt.xlabel('Time (s)')
+# plt.ylabel('r')
+# plt.legend()
+# plt.grid()
+
+# plt.figure()
+# for i in range(4):
+#   plt.plot(t, X[1,i,:], label=f'Leg {i} theta')
+# plt.title('CPG Phases')
+# plt.xlabel('Time (s)')
+# plt.ylabel('theta (rad)')
+# plt.legend()
+# plt.grid()
+
+# plt.show()

@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: Copyright (c) 2022 Guillaume Bellegarda. All rights reserved.
 # SPDX-License-Identifier: BSD-3-Clause
-# 
+#
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted provided that the following conditions are met:
 #
@@ -29,6 +29,7 @@
 # Copyright (c) 2022 EPFL, Guillaume Bellegarda
 
 import os, sys
+os.environ['KMP_DUPLICATE_LIB_OK'] = 'TRUE'  # Fix OpenMP conflict
 import gymnasium as gym
 import numpy as np
 import time
@@ -43,7 +44,7 @@ from sys import platform
 #   matplotlib.use('TkAgg')
 
 # stable-baselines3
-from stable_baselines3.common.monitor import load_results 
+from stable_baselines3.common.monitor import load_results
 from stable_baselines3.common.vec_env import VecNormalize
 from stable_baselines3 import PPO, SAC
 # from stable_baselines3.common.cmd_util import make_vec_env
@@ -57,24 +58,27 @@ from utils.file_utils import get_latest_model, load_all_results
 LEARNING_ALG = "PPO" #"SAC"
 interm_dir = "./logs/intermediate_models/"
 # path to saved models, i.e. interm_dir + '102824115106'
-log_dir = interm_dir + ''
+log_dir = interm_dir + '121425153909' # change to your desired folder
 
 # initialize env configs (render at test time)
 # check ideal conditions, as well as robustness to UNSEEN noise during training
 env_config = {}
 env_config['render'] = True
-env_config['record_video'] = False
-env_config['add_noise'] = False 
+env_config['record_video'] = True
+env_config['add_noise'] = False
+env_config['observation_space_mode'] = "SPEED2"
+env_config["motor_control_mode"] = "CARTESIAN_PD"
+env_config["task_env"] = "FWD_LOCOMOTION"
 
-# get latest model and normalization stats, and plot 
+# get latest model and normalization stats, and plot
 stats_path = os.path.join(log_dir, "vec_normalize.pkl")
 model_name = get_latest_model(log_dir)
 monitor_results = load_results(log_dir)
 print(monitor_results)
 plot_results([log_dir] , 10e10, 'timesteps', LEARNING_ALG + ' ')
-plt.show() 
+plt.show()
 
-# reconstruct env 
+# reconstruct env
 env = lambda: QuadrupedGymEnv(**env_config)
 env = make_vec_env(env, n_envs=1)
 env = VecNormalize.load(stats_path, env)
@@ -91,19 +95,29 @@ print("\nLoaded model", model_name, "\n")
 obs = env.reset()
 episode_reward = 0
 
-# [TODO] initialize arrays to save data from simulation 
+# [TODO] initialize arrays to save data from simulation
+EP_REW = np.zeros(2000)
 
 for i in range(2000):
     action, _states = model.predict(obs,deterministic=False) # sample at test time? ([TODO]: test if the outputs make sense)
     obs, rewards, dones, info = env.step(action)
     episode_reward += rewards
-    
+    EP_REW[i] = rewards
+
     if dones:
         print('episode_reward', episode_reward)
         print('Final base position', info[0]['base_pos'])
         episode_reward = 0
 
-    # [TODO] save data from current robot states for plots 
-    # To get base position, for example: env.envs[0].env.robot.GetBasePosition() 
-    
+    # [TODO] save data from current robot states for plots
+    # To get base position, for example: env.envs[0].env.robot.GetBasePosition()
+
 # [TODO] make plots
+time_array = np.arange(0,2000)*0.02  # assuming control timestep of 0.02s
+plt.figure()
+plt.plot(time_array, EP_REW)
+plt.xlabel('Time (s)')
+plt.ylabel('Reward')
+plt.title('Episode Reward over Time')
+plt.grid()
+plt.show()
