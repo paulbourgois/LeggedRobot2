@@ -194,16 +194,16 @@ class QuadrupedGymEnv(gym.Env):
       self._observation_noise_stdev = 0.0
 
     self.des_velocity = np.array([1.2, 0, 0])
-    self.vx_max = 0.8
+    self.vx_max = 1.2
     self.vx_min = 0.5
-    self.vy_max = 1.2
-    self.vy_min = 0.2
-    self.wz_max = 1.0
+    self.vy_max = 0.5
+    self.wz_max = 0.5
+
+    self._cmd_override = False
+    self._cmd_override_value = np.array([0.0, 0.0, 0.0], dtype=np.float32)
 
 
     # reward weights 
-    #self.w_vx = 0.75
-    #self.w_vy = 0.75
     self.w_vx = 1.5
     self.w_vy = 1.4
     self.w_yaw = 0.75
@@ -275,10 +275,10 @@ class QuadrupedGymEnv(gym.Env):
     thetadot_high = np.ones(NUM_LEGS) * (thetadot_max + OBSERVATION_EPS)
     thetadot_low  = np.zeros(NUM_LEGS) - OBSERVATION_EPS
 
-    # desired_vel_high = np.array([self.vx_max, self.vy_max, self.wz_max ]) + OBSERVATION_EPS
-    # desired_vel_low = np.array([self.vx_min, self.vy_min, -self.wz_max ])  - OBSERVATION_EPS
-    desired_vel_high =  np.array([self.vx_max]) + OBSERVATION_EPS
-    desired_vel_low = np.array([self.vx_min]) - OBSERVATION_EPS
+    desired_vel_high = np.array([self.vx_max, self.vy_max, self.wz_max ]) + OBSERVATION_EPS
+    desired_vel_low = np.array([self.vx_min, -self.vy_max, -self.wz_max ])  - OBSERVATION_EPS
+    # desired_vel_high =  np.array([self.vx_max]) + OBSERVATION_EPS
+    # desired_vel_low = np.array([self.vx_min]) - OBSERVATION_EPS
     vel_high = 1.3 * np.array([self.vx_max, self.vy_max, self.wz_max ]) 
     vel_low = np.array([0.2 * self.vx_min, -self.vy_max, -self.wz_max ])
     rpy_high = np.array([np.pi/4, np.pi/4, np.pi/4])
@@ -423,7 +423,7 @@ class QuadrupedGymEnv(gym.Env):
       linear_vel = self.robot.GetBaseLinearVelocity()
       rpy = self.robot.GetBaseOrientationRollPitchYaw()
       rpy_vel = self.robot.GetBaseAngularVelocity()
-      self._observation = np.concatenate((self.des_velocity[0],
+      self._observation = np.concatenate((self.des_velocity,
                                           contact_bool,
                                           self._cpg.get_r(),
                                           self._cpg.get_theta(),
@@ -452,8 +452,7 @@ class QuadrupedGymEnv(gym.Env):
       rpy_vel = self.robot.GetBaseAngularVelocity()
       joint_state = self.robot.GetMotorAngles()
       joint_vel = self.robot.GetMotorVelocities()
-      self._observation = np.concatenate((np.array([self.des_velocity[0]]),
-                                          # self._last_action,
+      self._observation = np.concatenate((self.des_velocity,
                                           contact_bool,
                                           self._cpg.get_r(),
                                           self._cpg.get_theta(),
@@ -580,80 +579,94 @@ class QuadrupedGymEnv(gym.Env):
     return float(np.exp(-np.sum(error**2) / sigma))
   
   def _reward_lr_course_full(self):
-    # --- state ---
+    # --- world-frame state ---
     vx, vy, vz = self.robot.GetBaseLinearVelocity()
     wx, wy, wz = self.robot.GetBaseAngularVelocity()
     roll, pitch, yaw = self.robot.GetBaseOrientationRollPitchYaw()
-    position = self.robot.GetBasePosition()
+    pos = self.robot.GetBasePosition()
 
-    vx_des, vy_des, wz_des = self.des_velocity
+    vx_des, vy_des, wz_des = self.des_velocity  # you want WORLD-FRAME commands
 
-    # --- tracking rewards (0..1) ---
-    k_v = 2.0
-    k_w = 1.0
-    r_vx = float(np.exp(-k_v * (vx - vx_des)**2))
-    r_vy = float(np.exp(-k_v * (vy - vy_des)**2))
-    r_wz = float(np.exp(-k_w * (wz - wz_des)**2))
-
-    # --- slope-safe stability ---
-    # A) penalize roll strongly, pitch relative to reference (not to 0)
-    pitch_ref = float(np.clip(0.6 * np.arctan2(vz, max(abs(vx), 1e-3)), -0.35, 0.35))
-    p_roll = float(roll * roll)
-    p_pitch_err = float((pitch - pitch_ref) * (pitch - pitch_ref))
-
-    # B) penalize vertical bounce and lateral drift
-    p_z_vel = float(vz * vz)
-    p_y_dev = float(position[1] * position[1])
-
-    # C) penalize big angular rates (very important for “slap” instability)
-    p_ang_rate = float(wx*wx + wy*wy)  # roll/pitch rates
-
-    # --- energy (positive work) ---
-    energy = 0.0
+    # --- energy/work (your usual) ---
+    energy_work = 0.0
     for tau, vel in zip(self._dt_motor_torques, self._dt_motor_velocities):
-        energy += float(np.abs(np.dot(tau, vel)) * self._time_step)
+        energy_work += float(np.abs(np.dot(tau, vel)) * self._time_step)
 
-    # --- weights ---
-    w_vx, w_vy, w_wz = 1.0, 1.0, 0.3
-    w_ydev = 0.2
-    w_zvel = 0.2
-    w_roll = 0.8
-    w_pitch = 0.3         # pitch error to pitch_ref
-    w_ang_rate = 0.05
-    w_energy = 0.0005
 
-    # --- weighted contributions (signed) ---
-    wterms = {
-        "r_vx": w_vx * r_vx,
-        "r_vy": w_vy * r_vy,
-        "r_wz": w_wz * r_wz,
+    # Reward positive vx directly (dense shaping), saturate at vx_des (or 1.0).
+    vx_cap = float(max(0.2, min(vx_des, 1.2)))  # keep sane
+    r_fwd_dense = 0.10 * float(np.clip(vx, 0.0, vx_cap) / max(vx_cap, 1e-3))
+    r_vx_track = 0.05 * float(np.exp(-(1.0 / 0.25) * (vx - vx_des) ** 2))
+    # range: [0, 0.05]
 
-        "p_y_dev": -w_ydev * p_y_dev,
-        "p_z_vel": -w_zvel * p_z_vel,
-        "p_roll":  -w_roll * p_roll,
-        "p_pitch_err": -w_pitch * p_pitch_err,
-        "p_ang_rate": -w_ang_rate * p_ang_rate,
+    # =========================================================
+    # 3) Explicit backward penalty (prevents the "backward local optimum")
+    # =========================================================
+    back = float(max(0.0, -vx))               # only if vx < 0
+    p_backward = -0.10 * (back * back)        # strong enough to matter
 
-        "energy": -w_energy * energy,
+    # =========================================================
+    # 4) Straightness & drift in WORLD frame
+    # =========================================================
+    # If you truly want world-x locomotion, yaw should stay near 0 (facing +x).
+    # Use wrapped yaw so it doesn't blow up.
+    yaw_wrapped = float((yaw + np.pi) % (2*np.pi) - np.pi)
+    p_yaw = -0.05 * (yaw_wrapped * yaw_wrapped)
+
+    # Penalize lateral world velocity directly (vy), plus lateral displacement y if you want corridor following
+    p_vy = -0.05 * float(vy * vy)
+    p_y = -0.01 * float(abs(pos[1]))          # keep your original style small
+
+    # =========================================================
+    # 5) Slope-safe stability (NO pitch-angle penalty)
+    # =========================================================
+    p_roll = -0.10 * float(roll * roll)
+    p_ang_rate = -0.005 * float(wx * wx + wy * wy)
+
+    vz_thresh = 0.25
+    vz_excess = max(0.0, abs(float(vz)) - vz_thresh)
+    p_vz = -0.02 * float(vz_excess * vz_excess)
+
+    # =========================================================
+    # 6) Energy (your tested weight)
+    # =========================================================
+    p_energy = -0.01 * float(energy_work)
+
+    reward = (
+        r_fwd_dense + r_vx_track
+        + p_backward
+        + p_yaw + p_vy + p_y
+        + p_roll + p_ang_rate + p_vz
+        + p_energy
+    )
+
+    # --- logging: IMPORTANT, log the exact vx used (world vx) ---
+    self._rew_terms_step = {
+        "r/fwd_dense": float(r_fwd_dense),
+        "r/vx_track": float(r_vx_track),
+
+        "p/backward": float(p_backward),
+        "p/yaw": float(p_yaw),
+        "p/vy": float(p_vy),
+        "p/y": float(p_y),
+        "p/roll": float(p_roll),
+        "p/ang_rate": float(p_ang_rate),
+        "p/vz": float(p_vz),
+        "p/energy": float(p_energy),
+
+        "raw/vx_world": float(vx),
+        "raw/vy_world": float(vy),
+        "raw/vz_world": float(vz),
+        "raw/vx_des": float(vx_des),
+        "raw/yaw_wrapped": float(yaw_wrapped),
+        "raw/roll": float(roll),
+        "raw/pitch": float(pitch),
+        "raw/energy_work": float(energy_work),
+
+        "reward": float(reward),
     }
 
-    reward = float(sum(wterms.values()))
-
-    # --- logging: raw + weighted ---
-    self._rew_terms_raw = {
-        "r_vx": r_vx, "r_vy": r_vy, "r_wz": r_wz,
-        "p_y_dev": p_y_dev, "p_z_vel": p_z_vel,
-        "p_roll": p_roll, "p_pitch_err": p_pitch_err, "p_ang_rate": p_ang_rate,
-        "energy": energy,
-        "pitch_ref": pitch_ref,
-    }
-    self._rew_terms_w = {k: float(v) for k, v in wterms.items()}
-
-    # if your callback expects this key:
-    self._rew_terms_step = dict(self._rew_terms_w)
-    self._rew_terms_step["reward"] = reward
-
-    return reward
+    return float(reward)
 
 
   def _reward_lr_course(self):
@@ -979,8 +992,30 @@ class QuadrupedGymEnv(gym.Env):
   ######################################################################################
   # Reset
   ######################################################################################
-  def set_desired_velocity(self, desired_velocity):
-    self.des_velocity = desired_velocity
+  def set_command(self, vx=None, vy=None, wz=None, *, randomize=False, override=True):
+    vx_min, vx_max = self.vx_min, self.vx_max
+    vy_min, vy_max = -self.vy_max, self.vy_max
+    wz_min, wz_max = -self.wz_max, self.wz_max
+
+    if randomize:
+      vx = float(self.np_random.uniform(vx_min, vx_max))
+      vy = float(self.np_random.uniform(vy_min, vy_max))
+      wz = float(self.np_random.uniform(wz_min, wz_max))
+    else:
+      if vx is None: vx = float(self.des_velocity[0])
+      if vy is None: vy = float(self.des_velocity[1])
+      if wz is None: wz = float(self.des_velocity[2])
+      vx = float(np.clip(vx, vx_min, vx_max))
+      vy = float(np.clip(vy, vy_min, vy_max))
+      wz = float(np.clip(wz, wz_min, wz_max))
+
+    cmd = np.array([vx, vy, wz], dtype=np.float32)
+    self.des_velocity = cmd
+
+    # override controls whether reset() resamples
+    self._cmd_override = bool(override)
+    self._cmd_override_value = cmd.copy()
+    return cmd.copy()
 
   def reset(self, seed: Optional[float] = None):
     """ Set up simulation environment. """
@@ -989,11 +1024,16 @@ class QuadrupedGymEnv(gym.Env):
     # Update seed
     self.seed(seed)
 
-    # resample desired velovity
-    vx = self.np_random.uniform(self.vx_min, self.vx_max)
-    # vy = self.np_random.uniform(-self.vy_max, self.vy_max)
-    # wz = self.np_random.uniform(-self.wz_max, self.wz_max)
-    self.des_velocity = np.array([vx, 0, 0], dtype=np.float32)
+    if self._cmd_override:
+      self.des_velocity = self._cmd_override_value.copy()
+      print(f"Desired Vel {self.des_velocity}")
+    else:
+      # resample desired velovity
+      vx = self.np_random.uniform(self.vx_min, self.vx_max)
+      # vy = self.np_random.uniform(-self.vy_max, self.vy_max)
+      # wz = self.np_random.uniform(-self.wz_max, self.wz_max)
+      self.des_velocity = np.array([vx, 0, 0], dtype=np.float32)
+    
 
     # Disable rendering when setting up models (otherwise too slow)
     if self._is_render:
@@ -1033,6 +1073,8 @@ class QuadrupedGymEnv(gym.Env):
 
       if self._terrain is not None:
         if self._terrain == "SLOPES":
+          if (self._terrain_difficulty == 0):
+            return
           pitch = 0.05 * self._terrain_difficulty
           self.add_slopes(pitch=pitch)
         elif self._terrain == "STAIRS":
@@ -1041,18 +1083,6 @@ class QuadrupedGymEnv(gym.Env):
           self.add_gaps(num_gaps=5, gap_width=0.1, between_gaps_width=2)
         elif self._terrain == "RANDOM":
           self.add_random_boxes()
-        elif self._terrain == "CUSTOM_1":
-          # Custom critical terrain: combination of stairs, gaps, slopes, random obstacles
-          # to break simple open-loop CPG controllers.
-          # This will compose several existing primitives into one long, challenging
-          # track in front of the robot.
-          # You can tune difficulty via the difficulty keyword in env constructor
-          # (small ints->easier, larger->harder). We fall back to difficulty=2.
-          difficulty = getattr(self, '_terrain_difficulty', None)
-          if difficulty is None:
-            # try reading from kwargs fallback if user passed it earlier
-            difficulty = 2
-          self.add_critical_terrain(difficulty=difficulty)
         else:
           print('Terrain',self._terrain,'is not implemented')
       elif self._TASK_ENV == "FLAGRUN":
