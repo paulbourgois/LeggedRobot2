@@ -116,7 +116,7 @@ MAX_FWD_VELOCITY = 1  # to avoid exploiting simulator dynamics, cap max reward f
 # CPG quantities, matching with ones in hopf_network.py
 MU_LOW = 1
 MU_UPP = 2
-ALPHA =  150
+ALPHA =  50
 F_MAX = 100 # actually I just put an arbitrary large number here, i think it does not mater anyway actually -- Nathan
 
 class QuadrupedGymEnv(gym.Env):
@@ -195,15 +195,19 @@ class QuadrupedGymEnv(gym.Env):
 
     self.des_velocity = np.array([1.2, 0, 0])
     self.vx_max = 1.2
-    self.vx_min = 0.8
-    self.vy_max = 1.2
-    self.vy_min = 0.2
-    self.wz_max = 1.0
+    self.vx_min = 0.5
+    self.vy_max = 0.5
+    self.wz_max = 0.5
+
+    if (self._terrain_difficulty >= 3):
+      self.vx_max = 0.9
+      self.vx_max = 0.6
+
+    self._cmd_override = False
+    self._cmd_override_value = np.array([0.0, 0.0, 0.0], dtype=np.float32)
 
 
     # reward weights
-    #self.w_vx = 0.75
-    #self.w_vy = 0.75
     self.w_vx = 1.5
     self.w_vy = 1.4
     self.w_yaw = 0.75
@@ -276,7 +280,7 @@ class QuadrupedGymEnv(gym.Env):
     thetadot_low  = np.zeros(NUM_LEGS) - OBSERVATION_EPS
 
     desired_vel_high = np.array([self.vx_max, self.vy_max, self.wz_max ]) + OBSERVATION_EPS
-    desired_vel_low = np.array([self.vx_min, self.vy_min, -self.wz_max ])  - OBSERVATION_EPS
+    desired_vel_low = np.array([self.vx_min, -self.vy_max, -self.wz_max ])  - OBSERVATION_EPS
     # desired_vel_high =  np.array([self.vx_max]) + OBSERVATION_EPS
     # desired_vel_low = np.array([self.vx_min]) - OBSERVATION_EPS
     vel_high = 1.3 * np.array([self.vx_max, self.vy_max, self.wz_max ])
@@ -423,7 +427,7 @@ class QuadrupedGymEnv(gym.Env):
       linear_vel = self.robot.GetBaseLinearVelocity()
       rpy = self.robot.GetBaseOrientationRollPitchYaw()
       rpy_vel = self.robot.GetBaseAngularVelocity()
-      self._observation = np.concatenate((self.des_velocity[0],
+      self._observation = np.concatenate((self.des_velocity,
                                           contact_bool,
                                           self._cpg.get_r(),
                                           self._cpg.get_theta(),
@@ -452,8 +456,7 @@ class QuadrupedGymEnv(gym.Env):
       rpy_vel = self.robot.GetBaseAngularVelocity()
       joint_state = self.robot.GetMotorAngles()
       joint_vel = self.robot.GetMotorVelocities()
-      self._observation = np.concatenate((np.array([self.des_velocity]),
-                                          # self._last_action,
+      self._observation = np.concatenate((self.des_velocity,
                                           contact_bool,
                                           self._cpg.get_r(),
                                           self._cpg.get_theta(),
@@ -588,6 +591,85 @@ class QuadrupedGymEnv(gym.Env):
   def _cpg_rl_tracking_term(self, error, sigma=0.17):
     return float(np.exp(-np.sum(error**2) / sigma))
 
+  def _reward_lr_course_full(self):
+    # --- world-frame state ---
+    vx, vy, vz = self.robot.GetBaseLinearVelocity()
+    wx, wy, wz = self.robot.GetBaseAngularVelocity()
+    roll, pitch, yaw = self.robot.GetBaseOrientationRollPitchYaw()
+    pos = self.robot.GetBasePosition()
+
+    vx_des, vy_des, wz_des = self.des_velocity  # you want WORLD-FRAME commands
+
+    # --- energy/work (your usual) ---
+    energy_work = 0.0
+    for tau, vel in zip(self._dt_motor_torques, self._dt_motor_velocities):
+        energy_work += float(np.abs(np.dot(tau, vel)) * self._time_step)
+
+    # Reward positive vx directly (dense shaping), saturate at vx_des (or 1.0).
+    vx_cap = float(max(0.2, min(vx_des, 1.2)))  # keep sane
+    r_fwd_dense = 0.10 * float(np.clip(vx, 0.0, vx_cap) / max(vx_cap, 1e-3))
+    r_vx_track = 0.05 * float(np.exp(-(1.0 / 0.25) * (vx - vx_des) ** 2))
+    # range: [0, 0.05]
+
+    # 3) Explicit backward penalty (prevents the "backward local optimum")
+    back = float(max(0.0, -vx))               # only if vx < 0
+    p_backward = -0.10 * (back * back)        # strong enough to matter
+
+    # 4) Straightness & drift in WORLD frame
+    yaw_wrapped = float((yaw + np.pi) % (2*np.pi) - np.pi)
+    p_yaw = -0.05 * (yaw_wrapped * yaw_wrapped)
+
+    # Penalize lateral world velocity directly (vy), plus lateral displacement y if you want corridor following
+    p_vy = -0.05 * float(vy * vy)
+    p_y = -0.01 * float(abs(pos[1]))
+
+    p_roll = -0.10 * float(roll * roll)
+    p_ang_rate = -0.005 * float(wx * wx + wy * wy)
+
+    vz_thresh = 0.25
+    vz_excess = max(0.0, abs(float(vz)) - vz_thresh)
+    p_vz = -0.02 * float(vz_excess * vz_excess)
+
+
+    p_energy = -0.01 * float(energy_work)
+
+    reward = (
+        r_fwd_dense + r_vx_track
+        + p_backward
+        + p_yaw + p_vy + p_y
+        + p_roll + p_ang_rate + p_vz
+        + p_energy
+    )
+
+    # --- logging: IMPORTANT, log the exact vx used (world vx) ---
+    self._rew_terms_step = {
+        "r/fwd_dense": float(r_fwd_dense),
+        "r/vx_track": float(r_vx_track),
+
+        "p/backward": float(p_backward),
+        "p/yaw": float(p_yaw),
+        "p/vy": float(p_vy),
+        "p/y": float(p_y),
+        "p/roll": float(p_roll),
+        "p/ang_rate": float(p_ang_rate),
+        "p/vz": float(p_vz),
+        "p/energy": float(p_energy),
+
+        "raw/vx_world": float(vx),
+        "raw/vy_world": float(vy),
+        "raw/vz_world": float(vz),
+        "raw/vx_des": float(vx_des),
+        "raw/yaw_wrapped": float(yaw_wrapped),
+        "raw/roll": float(roll),
+        "raw/pitch": float(pitch),
+        "raw/energy_work": float(energy_work),
+
+        "reward": float(reward),
+    }
+
+    return float(reward)
+
+
   def _reward_lr_course(self):
     """ Implement your reward function here. How will you improve upon the above? """
     # [TODO] add your reward function. -- tick
@@ -613,24 +695,24 @@ class QuadrupedGymEnv(gym.Env):
     for tau,vel in zip(self._dt_motor_torques,self._dt_motor_velocities):
       energy_reward += np.abs(np.dot(tau,vel)) * self._time_step
 
-    reward = (
-        self.w_vx * r_vx +
-        self.w_pos_y_pen * (np.abs(position[1])) +
-        self.w_vz_pen * r_vz_pen +
-        self.w_ry_pen * r_ry_pen +
-        self.w_work * energy_reward
-    ) * 0.01
-
     # reward = (
     #     self.w_vx * r_vx +
-    #     self.w_pos_y_pen * (np.abs(position[1]) +
-    #     self.w_vy * r_vy +
-    #     self.w_yaw * r_yaw +
+    #     self.w_pos_y_pen * (np.abs(position[1])) +
     #     self.w_vz_pen * r_vz_pen +
-    #     self.w_ang_pen * r_ang_pen +
     #     self.w_ry_pen * r_ry_pen +
     #     self.w_work * energy_reward
     # ) * 0.01
+
+    reward = (
+        self.w_vx * r_vx +
+        self.w_pos_y_pen * (np.abs(position[1])) +
+        self.w_vy * r_vy +
+        self.w_yaw * r_yaw +
+        self.w_vz_pen * r_vz_pen +
+        self.w_ang_pen * r_ang_pen +
+        self.w_ry_pen * r_ry_pen +
+        self.w_work * energy_reward
+    ) * 0.01
 
 
     ## Just to log these to track the learning
@@ -643,7 +725,7 @@ class QuadrupedGymEnv(gym.Env):
         "work_raw": float(energy_reward),
         # weighted contributions:
         "r_vx_w": float(self.w_vx * r_vx * 0.01),
-        "r_vy_w": float(self.w_vy * r_vy * 0.01),
+        # "r_vy_w": float(self.w_vy * r_vy * 0.01),
         # "r_yaw_w": float(self.w_yaw * r_yaw * 0.01),
         "r_vz_pen_w": float(self.w_vz_pen * r_vz_pen * 0.01),
         # "r_ang_pen_w": float(self.w_ang_pen * r_ang_pen * 0.01),
@@ -657,7 +739,7 @@ class QuadrupedGymEnv(gym.Env):
     if self._TASK_ENV == "FWD_LOCOMOTION":
       return self._reward_fwd_locomotion()
     elif self._TASK_ENV == "LR_COURSE_TASK":
-      return self._reward_lr_course()
+      return self._reward_lr_course_full()
     elif self._TASK_ENV == "FLAGRUN":
       return self._reward_flag_run()
     elif self._TASK_ENV == "FWD_LOCOMOTION_CPG":
@@ -793,6 +875,7 @@ class QuadrupedGymEnv(gym.Env):
   def step(self, action, des_vel_x=None):
     """ Step forward the simulation, given the action. """
     curr_act = action.copy()
+
     # save motor torques and velocities to compute power in reward function
     self._dt_motor_torques = []
     self._dt_motor_velocities = []
@@ -823,79 +906,122 @@ class QuadrupedGymEnv(gym.Env):
     # accumulate episode stats
     self._ep_len += 1
     if self._rew_terms_step:
-        for k, v in self._rew_terms_step.items():
-            self._rew_terms_ep[k] = self._rew_terms_ep.get(k, 0.0) + v
+      for k, v in self._rew_terms_step.items():
+        self._rew_terms_ep[k] = self._rew_terms_ep.get(k, 0.0) + v
 
     terminated = self._termination()
     truncated = truncated or (self.get_sim_time() > self._MAX_EP_LEN and not self._test_flagrun)
 
-    info = self._get_info()
+    # --- episode accumulators ---
+    # Make sure these exist (init them in reset ideally)
+    if not hasattr(self, "_ep_len"):
+      self._ep_len = 0
+    if not hasattr(self, "_ep_return"):
+      self._ep_return = 0.0
+    if not hasattr(self, "_rew_terms_ep"):
+      self._rew_terms_ep = {}
 
-    # always attach instantaneous telemetry (so callbacks can stream scalars)
-    # suggested extra diagnostics:
+    self._ep_len += 1
+    self._ep_return += reward
+
+    # accumulate weighted contributions (includes reward)
+    if getattr(self, "_rew_terms_step", None):
+      for k, v in self._rew_terms_step.items():
+        self._rew_terms_ep[k] = self._rew_terms_ep.get(k, 0.0) + float(v)
+
+    # --- info payload ---
+    info = self._get_info()
     base_lin = self.robot.GetBaseLinearVelocity()
     base_ang = self.robot.GetBaseAngularVelocity()
+    roll, pitch, yaw = self.robot.GetBaseOrientationRollPitchYaw()
+    pos = self.robot.GetBasePosition()
     _, _, _, contact_bool = self.robot.GetContactInfo()
 
-    if des_vel_x is None:
-        des_vel_x = self.robot.desired_velocity
-
-    dt = self._time_step * self._action_repeat
-
-    linear_body_vel_tracking_x = np.exp(-4 * np.linalg.norm(des_vel_x - self.robot.GetBaseLinearVelocity()[0])**2)        # [0,1]
-    linear_body_vel_tracking_y = np.exp(-4 * np.linalg.norm(0 - self.robot.GetBaseLinearVelocity()[1])**2)        # [0,1]
-    angular_body_vel_tracking_z = np.exp(-1 * np.linalg.norm(0 - self.robot.GetBaseAngularVelocity()[2])**2)        # [0,1]
-    linear_body_vel_penalty_z = - self.robot.GetBaseLinearVelocity()[2]**2  # closer to 0 is better
-    angular_body_vel_penalty_x = - np.linalg.norm(np.array([self.robot.GetBaseAngularVelocity()[0], self.robot.GetBaseAngularVelocity()[1]]))**2  # closer to 0 is better
-    work_between_steps = - abs(np.dot(np.array(self._dt_motor_torques[-1]), np.array(self._dt_motor_velocities[-1]))) * dt  # negative work is better
-    weight = [0.5, 0.75, 0.5, 2, 0.05, 0.001]
-
-    reward = weight[0]*dt*linear_body_vel_tracking_x + weight[1]*dt*linear_body_vel_tracking_y + weight[2]*dt*angular_body_vel_tracking_z + weight[3]*dt*linear_body_vel_penalty_z + weight[4]*dt*angular_body_vel_penalty_x + weight[5]*dt*work_between_steps
-
-
+    vx_des, vy_des, wz_des = self.des_velocity
     info.update({
-        "rew/total": float(reward),
-        "rew/linear_body_vel_tracking_x": float(linear_body_vel_tracking_x),
-        "rew/linear_body_vel_tracking_y": float(linear_body_vel_tracking_y),
-        "rew/angular_body_vel_tracking_z": float(angular_body_vel_tracking_z),
-        "rew/linear_body_vel_penalty_z": float(linear_body_vel_penalty_z),
-        "rew/angular_body_vel_penalty_x": float(angular_body_vel_penalty_x),
-        "rew/work_between_steps": float(work_between_steps),
-        "rew_terms": dict(self._rew_terms_step),     # per-step
-        "kine/vx": float(base_lin[0]),
-        "kine/vy": float(base_lin[1]),
-        "kine/vz": float(base_lin[2]),
-        "kine/w_roll": float(base_ang[0]),
-        "kine/w_pitch": float(base_ang[1]),
-        "kine/w_yaw": float(base_ang[2]),
-        "contacts/num_in_contact": int(np.sum(contact_bool)),
-        "cpg/r_mean": float(np.mean(self._cpg.get_r())),
-        "cpg/omega_mean": float(np.mean(self._cpg.get_dtheta())),  # your omega
+      "cmd/vx": float(vx_des),
+      "cmd/vy": float(vy_des),
+      "cmd/wz": float(wz_des),
+      "err/vx": float(base_lin[0] - vx_des),
+      "err/vy": float(base_lin[1] - vy_des),
+      "err/wz": float(base_ang[2] - wz_des),
     })
 
-    # print(f"updated info with {len(info.keys())} keys {list(info.keys())}")
+    # per-step reward terms (YOUR CALLBACK READS rew_terms)
+    # Add termination flags INSIDE rew_terms so callback logs them too.
+    rew_terms = dict(getattr(self, "_rew_terms_step", {}))
+    rew_terms["term/terminated"] = float(terminated)
+    rew_terms["term/truncated"]  = float(truncated)
+    info.update({
+      "rew_terms": rew_terms,
 
-    # when episode ends, attach episode totals so SB3 Monitor/Callback can log them
+      "kine/vx": float(base_lin[0]),
+      "kine/vy": float(base_lin[1]),
+      "kine/vz": float(base_lin[2]),
+      "kine/w_roll": float(base_ang[0]),
+      "kine/w_pitch": float(base_ang[1]),
+      "kine/w_yaw": float(base_ang[2]),
+      "kine/roll": float(roll),
+      "kine/pitch": float(pitch),
+      "kine/base_z": float(pos[2]),
+      "kine/y_dev": float(pos[1]),
+
+      "contacts/num_in_contact": int(np.sum(contact_bool)),
+      "cpg/r_mean": float(np.mean(self._cpg.get_r())),
+      "cpg/omega_mean": float(np.mean(self._cpg.get_dtheta())),
+    })
+
+    # episode end: attach MEANS (not sums) so they are comparable across episode lengths
     if terminated or truncated:
-        info["episode_terms"] = dict(self._rew_terms_ep)  # episodic sums of weighted terms
-        info["episode_len"] = self._ep_len
-        # reset accumulators for the next episode
-        self._rew_terms_ep = {}
-        self._ep_len = 0
+      L = max(self._ep_len, 1)
+
+      # mean per-step episode terms
+      ep_terms_mean = {k: float(v / L) for k, v in self._rew_terms_ep.items()}
+      ep_terms_mean["episode_return"] = float(self._ep_return)
+
+      info["episode_terms"] = ep_terms_mean
+      info["episode_len"] = int(self._ep_len)
+
+      # reset accumulators
+      self._rew_terms_ep = {}
+      self._ep_len = 0
+      self._ep_return = 0.0
 
     if "FLAGRUN" in self._TASK_ENV:
       dist_to_goal, _ = self.get_distance_and_angle_to_goal()
-
       if dist_to_goal < 0.5:
-        self._reset_goal()
+          self._reset_goal()
 
     return np.array(self._noisy_observation()), reward, terminated, truncated, info
+
 
   ######################################################################################
   # Reset
   ######################################################################################
-  def set_desired_velocity(self, desired_velocity):
-    self.des_velocity = desired_velocity
+  def set_command(self, vx=None, vy=None, wz=None, *, randomize=False, override=True):
+    vx_min, vx_max = self.vx_min, self.vx_max
+    vy_min, vy_max = -self.vy_max, self.vy_max
+    wz_min, wz_max = -self.wz_max, self.wz_max
+
+    if randomize:
+      vx = float(self.np_random.uniform(vx_min, vx_max))
+      vy = float(self.np_random.uniform(vy_min, vy_max))
+      wz = float(self.np_random.uniform(wz_min, wz_max))
+    else:
+      if vx is None: vx = float(self.des_velocity[0])
+      if vy is None: vy = float(self.des_velocity[1])
+      if wz is None: wz = float(self.des_velocity[2])
+      vx = float(np.clip(vx, vx_min, vx_max))
+      vy = float(np.clip(vy, vy_min, vy_max))
+      wz = float(np.clip(wz, wz_min, wz_max))
+
+    cmd = np.array([vx, vy, wz], dtype=np.float32)
+    self.des_velocity = cmd
+
+    # override controls whether reset() resamples
+    self._cmd_override = bool(override)
+    self._cmd_override_value = cmd.copy()
+    return cmd.copy()
 
   def reset(self, seed: Optional[float] = None):
     """ Set up simulation environment. """
@@ -904,12 +1030,16 @@ class QuadrupedGymEnv(gym.Env):
     # Update seed
     self.seed(seed)
 
-    # resample desired velovity
-    vx = self.np_random.uniform(self.vx_min, self.vx_max)
-    # vy = self.np_random.uniform(-self.vy_max, self.vy_max)
-    # wz = self.np_random.uniform(-self.wz_max, self.wz_max)
-    self.des_velocity = np.array([vx, 0, 0], dtype=np.float32)
-    print("Desired velocity:", self.des_velocity)
+    if self._cmd_override:
+      self.des_velocity = self._cmd_override_value.copy()
+      print(f"Desired Vel {self.des_velocity}")
+    else:
+      # resample desired velovity
+      vx = self.np_random.uniform(self.vx_min, self.vx_max)
+      # vy = self.np_random.uniform(-self.vy_max, self.vy_max)
+      # wz = self.np_random.uniform(-self.wz_max, self.wz_max)
+      self.des_velocity = np.array([vx, 0, 0], dtype=np.float32)
+
 
     # Disable rendering when setting up models (otherwise too slow)
     if self._is_render:
@@ -949,6 +1079,8 @@ class QuadrupedGymEnv(gym.Env):
 
       if self._terrain is not None:
         if self._terrain == "SLOPES":
+          if (self._terrain_difficulty == 0):
+            return
           pitch = 0.05 * self._terrain_difficulty
           self.add_slopes(pitch=pitch)
         elif self._terrain == "STAIRS":
@@ -957,18 +1089,6 @@ class QuadrupedGymEnv(gym.Env):
           self.add_gaps(num_gaps=5, gap_width=0.1, between_gaps_width=2)
         elif self._terrain == "RANDOM":
           self.add_random_boxes()
-        elif self._terrain == "CUSTOM_1":
-          # Custom critical terrain: combination of stairs, gaps, slopes, random obstacles
-          # to break simple open-loop CPG controllers.
-          # This will compose several existing primitives into one long, challenging
-          # track in front of the robot.
-          # You can tune difficulty via the difficulty keyword in env constructor
-          # (small ints->easier, larger->harder). We fall back to difficulty=2.
-          difficulty = getattr(self, '_terrain_difficulty', None)
-          if difficulty is None:
-            # try reading from kwargs fallback if user passed it earlier
-            difficulty = 2
-          self.add_critical_terrain(difficulty=difficulty)
         else:
           print('Terrain',self._terrain,'is not implemented')
       elif self._TASK_ENV == "FLAGRUN":
