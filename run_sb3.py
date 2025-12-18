@@ -55,7 +55,7 @@ from utils.file_utils import get_latest_model
 from env.quadruped_gym_env import QuadrupedGymEnv
 
 LEARNING_ALG = "PPO" # or "SAC"
-LOAD_NN = True # if you want to initialize training with a previous model
+LOAD_NN = False # if you want to initialize training with a previous model
 NUM_ENVS = 64    # how many pybullet environments to create for data collection
 USE_GPU = True # make sure to install all necessary drivers
 
@@ -74,10 +74,10 @@ USE_GPU = True # make sure to install all necessary drivers
 
 env_configs = {"motor_control_mode":"CPG",
                "task_env": "LR_COURSE_TASK",
-               "observation_space_mode": "FULL",
-               "terrain": "SLOPES",
+               "observation_space_mode": "MEDIUM",
+            #    "terrain": "SLOPES",
                # "terrain": None,
-               "terrain_difficulty": 4,
+            #    "terrain_difficulty": 4,
                "add_noise": False
                }
 
@@ -207,7 +207,7 @@ if LOAD_NN:
 
 # Learn and save (may need to train for longer)
 callbacks = CallbackList([checkpoint_callback, reward_tracking_callback])
-model.learn(total_timesteps=4000000, log_interval=1,callback=callbacks, tb_log_name=tb_log_name)
+model.learn(total_timesteps=2000000, log_interval=2,callback=callbacks, tb_log_name=tb_log_name)
 
 # Don't forget to save the VecNormalize statistics when saving the agent
 model.save( os.path.join(SAVE_PATH, "rl_model" ) )
