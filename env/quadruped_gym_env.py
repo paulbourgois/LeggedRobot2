@@ -199,6 +199,10 @@ class QuadrupedGymEnv(gym.Env):
     self.vy_max = 0.5
     self.wz_max = 0.5
 
+    if (self._terrain_difficulty >= 3):
+      self.vx_max = 0.9
+      self.vx_max = 0.6
+
     self._cmd_override = False
     self._cmd_override_value = np.array([0.0, 0.0, 0.0], dtype=np.float32)
 
@@ -592,34 +596,24 @@ class QuadrupedGymEnv(gym.Env):
     for tau, vel in zip(self._dt_motor_torques, self._dt_motor_velocities):
         energy_work += float(np.abs(np.dot(tau, vel)) * self._time_step)
 
-
     # Reward positive vx directly (dense shaping), saturate at vx_des (or 1.0).
     vx_cap = float(max(0.2, min(vx_des, 1.2)))  # keep sane
     r_fwd_dense = 0.10 * float(np.clip(vx, 0.0, vx_cap) / max(vx_cap, 1e-3))
     r_vx_track = 0.05 * float(np.exp(-(1.0 / 0.25) * (vx - vx_des) ** 2))
     # range: [0, 0.05]
 
-    # =========================================================
     # 3) Explicit backward penalty (prevents the "backward local optimum")
-    # =========================================================
     back = float(max(0.0, -vx))               # only if vx < 0
     p_backward = -0.10 * (back * back)        # strong enough to matter
 
-    # =========================================================
     # 4) Straightness & drift in WORLD frame
-    # =========================================================
-    # If you truly want world-x locomotion, yaw should stay near 0 (facing +x).
-    # Use wrapped yaw so it doesn't blow up.
     yaw_wrapped = float((yaw + np.pi) % (2*np.pi) - np.pi)
     p_yaw = -0.05 * (yaw_wrapped * yaw_wrapped)
 
     # Penalize lateral world velocity directly (vy), plus lateral displacement y if you want corridor following
     p_vy = -0.05 * float(vy * vy)
-    p_y = -0.01 * float(abs(pos[1]))          # keep your original style small
+    p_y = -0.01 * float(abs(pos[1]))
 
-    # =========================================================
-    # 5) Slope-safe stability (NO pitch-angle penalty)
-    # =========================================================
     p_roll = -0.10 * float(roll * roll)
     p_ang_rate = -0.005 * float(wx * wx + wy * wy)
 
@@ -627,9 +621,7 @@ class QuadrupedGymEnv(gym.Env):
     vz_excess = max(0.0, abs(float(vz)) - vz_thresh)
     p_vz = -0.02 * float(vz_excess * vz_excess)
 
-    # =========================================================
-    # 6) Energy (your tested weight)
-    # =========================================================
+
     p_energy = -0.01 * float(energy_work)
 
     reward = (

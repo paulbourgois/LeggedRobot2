@@ -58,7 +58,7 @@ LEARNING_ALG = "PPO" #"SAC"
 interm_dir = "./logs/intermediate_models/"
 # path to saved models, i.e. interm_dir + '102824115106'
 # log_dir = interm_dir + '120625210952'
-log_dir = interm_dir + '121625215450'
+log_dir = interm_dir + '121725230254'
 
 # initialize env configs (render at test time)
 # check ideal conditions, as well as robustness to UNSEEN noise during training
@@ -66,8 +66,9 @@ env_config = {}
 
 env_config["motor_control_mode"] = "CPG"
 env_config["task_env"] = "LR_COURSE_TASK" #  "LR_COURSE_TASK",
-env_config["terrain"] = None #  "LR_COURSE_TASK",
-env_config["terrain_difficulty"] = 0 #  "LR_COURSE_TASK",
+#env_config["terrain"] = None #  "LR_COURSE_TASK",
+env_config["terrain"] = "SLOPES" #  "LR_COURSE_TASK",
+env_config["terrain_difficulty"] = 5 #  "LR_COURSE_TASK",
 env_config["observation_space_mode"] = "FULL"
 env_config['render'] = True
 env_config['record_video'] = False
@@ -99,12 +100,12 @@ env.venv.env_method("set_command", 1.0, 0.0, 0.0, randomize=False, override = Tr
 obs = env.reset()
 episode_reward = 0
 
-for i in range(5000):
+for i in range(7000):
     # change command every 400 steps
-    if (i % 600 > 300):
-        env.venv.env_method("set_command", 0.5, 0.0, 0.0, randomize=False, override = True)
-    else:
-        env.venv.env_method("set_command", 1.0, 0.0, 0.0, randomize=False, override = True)
+    # if (i % 600 > 300):
+    #     env.venv.env_method("set_command", 0.5, 0.0, 0.0, randomize=False, override = True)
+    # else:
+    #     env.venv.env_method("set_command", 1.0, 0.0, 0.0, randomize=False, override = True)
 
     
     action, _states = model.predict(obs,deterministic=True) # sample at test time? ([TODO]: test if the outputs make sense)

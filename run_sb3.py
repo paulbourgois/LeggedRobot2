@@ -42,6 +42,8 @@ from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
 from stable_baselines3 import PPO, SAC
 from stable_baselines3.common.env_util import make_vec_env
 from stable_baselines3.common.callbacks import CallbackList
+from stable_baselines3.common.utils import get_schedule_fn
+
 
 # utils
 from utils.utils import CheckpointCallback, RewardTermsCallback
@@ -66,7 +68,7 @@ env_configs = {"motor_control_mode":"CPG",
                "observation_space_mode": "FULL",
                "terrain": "SLOPES",
                # "terrain": None,
-               "terrain_difficulty": 1,
+               "terrain_difficulty": 4,
                "add_noise": False               
                }
 
@@ -92,7 +94,7 @@ TB_LOG = os.path.join(SAVE_PATH, "tb")
 
 
 # checkpoint to save policy network periodically
-checkpoint_callback = CheckpointCallback(save_freq=30000, save_path=SAVE_PATH,name_prefix='rl_model', verbose=2)
+checkpoint_callback = CheckpointCallback(save_freq=200000, save_path=SAVE_PATH,name_prefix='rl_model', verbose=2)
 reward_tracking_callback = RewardTermsCallback(step_period=2000, rollout_period=4096)
 
 
@@ -133,6 +135,25 @@ ppo_config = {  "gamma":0.99,
                 "device": gpu_arg
                 }
 
+ppo_reload_config = {  "gamma":0.99, 
+                "n_steps": int(n_steps/NUM_ENVS), 
+                "ent_coef":0.0, 
+                "learning_rate":lambda f: get_schedule_fn(3e-5), 
+                "vf_coef":0.5,
+                "max_grad_norm":0.5, 
+                "gae_lambda":0.95, 
+                "batch_size":512,
+                "n_epochs":4, 
+                "clip_range":0.2, 
+                "clip_range_vf":1,
+                "target_kl":0.02,
+                "verbose":1, 
+                "tensorboard_log":TB_LOG, 
+                "_init_setup_model":True, 
+                "policy_kwargs":cpg_policy_kwargs,
+                "device": gpu_arg
+                }
+
 # What are these hyperparameters? Check here: https://stable-baselines3.readthedocs.io/en/master/modules/sac.html
 sac_config={"learning_rate":1e-4,
             "buffer_size":300000,
@@ -158,14 +179,26 @@ else:
 
 if LOAD_NN:
     if LEARNING_ALG == "PPO":
-        model = PPO.load(model_name, env)
+
+        # over writinng the previous hyper params of the baseline policy
+        custom_objects = {
+            "learning_rate": 3e-5,
+            "clip_range": 0.2,
+        }
+
+        model = PPO.load(model_name, env, custom_objects=custom_objects)
+
+        # Override key hyperparams post-load (safe fine-tuning on harder terrain)
+        model.batch_size = ppo_reload_config["batch_size"]
+        model.n_epochs = ppo_reload_config["n_epochs"]
+        model.target_kl = ppo_reload_config["target_kl"]        
     elif LEARNING_ALG == "SAC":
         model = SAC.load(model_name, env)
     print("\nLoaded model", model_name, "\n")
 
 # Learn and save (may need to train for longer)
 callbacks = CallbackList([checkpoint_callback, reward_tracking_callback])
-model.learn(total_timesteps=7500000, log_interval=1,callback=callbacks, tb_log_name=tb_log_name)
+model.learn(total_timesteps=4000000, log_interval=1,callback=callbacks, tb_log_name=tb_log_name)
 
 # Don't forget to save the VecNormalize statistics when saving the agent
 model.save( os.path.join(SAVE_PATH, "rl_model" ) ) 

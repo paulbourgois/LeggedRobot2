@@ -60,6 +60,8 @@ class CheckpointCallback(BaseCallback):
         self.save_freq = save_freq
         self.save_path = save_path
         self.name_prefix = name_prefix
+        print("('=================================== Saving save_freq {}".format(save_freq))
+
 
     def _init_callback(self):# -> None:
         # Create folder if needed
@@ -67,15 +69,14 @@ class CheckpointCallback(BaseCallback):
             os.makedirs(self.save_path, exist_ok=True)
 
     def _on_step(self):# -> bool:
-        if self.n_calls % self.save_freq == 0:
+        if self.n_calls % 200000 == 0:
             path = os.path.join(self.save_path, '{}_{}_steps'.format(self.name_prefix, self.num_timesteps))
             self.model.save(path)
 
             stats_path = os.path.join(self.save_path, "vec_normalize.pkl")
             self.training_env.save(stats_path)
 
-            if self.verbose > 1:
-                print("Saving model checkpoint to {}".format(path))
+            print("('=================================== Saving model checkpoint to {}".format(path))
 
         if self.n_calls % 500 == 0: # self.save_freq < 10000 and 
             # also print out path periodically for off-policy aglorithms: SAC, TD3, etc.
