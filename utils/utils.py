@@ -197,7 +197,7 @@ def plot_curves(xy_list, xaxis, title):
     plt.ylabel("Episode Rewards")
     plt.tight_layout()
 
-def plot_results(dirs, num_timesteps, xaxis, task_name):
+def plot_results(dirs, num_timesteps, xaxis, task_name, save_dir):
     """
     plot the results
 
@@ -218,10 +218,16 @@ def plot_results(dirs, num_timesteps, xaxis, task_name):
     xy_list = [ts2xy(timesteps_item, xaxis) for timesteps_item in tslist]
     plot_curves(xy_list, xaxis, task_name+'Rewards')
     plt.ylabel("Episode Rewards")
+    reward_path = os.path.join(save_dir, f"{task_name}_r.png")
+    plt.savefig(reward_path)
+    
+
     #plt.figure(2)
     xy_list = [ts2xy(timesteps_item, xaxis, Y_EPLEN) for timesteps_item in tslist]
     plot_curves(xy_list, xaxis, task_name+'Ep Len')
     plt.ylabel("Episode Length")
+    ep_len_path = os.path.join(save_dir, f"{task_name}_ep.png")
+    plt.savefig(ep_len_path)
 
 ######################################################################################
 ## Load progress/result files (make general so can use from stable-baselines or rllib)

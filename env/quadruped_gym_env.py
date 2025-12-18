@@ -138,6 +138,7 @@ class QuadrupedGymEnv(gym.Env):
       render=False,
       record_video=False,
       add_noise=True,
+      add_base_mass=False,
       terrain=None,
       terrain_difficulty = 1,
       test_flagrun=False,
@@ -192,6 +193,7 @@ class QuadrupedGymEnv(gym.Env):
       self._observation_noise_stdev = 0.01 #
     else:
       self._observation_noise_stdev = 0.0
+    self._add_base_mass = add_base_mass
 
     self.des_velocity = np.array([1.2, 0, 0])
     self.vx_max = 1.2
@@ -201,7 +203,11 @@ class QuadrupedGymEnv(gym.Env):
 
     if (self._terrain_difficulty >= 3):
       self.vx_max = 0.9
-      self.vx_max = 0.6
+      self.vx_min = 0.6
+    
+    if (self._add_noise):
+      self.vx_max = 0.80
+      self.vx_min = 0.5
 
     self._cmd_override = False
     self._cmd_override_value = np.array([0.0, 0.0, 0.0], dtype=np.float32)
@@ -480,9 +486,20 @@ class QuadrupedGymEnv(gym.Env):
   def _noisy_observation(self):
     self._get_observation()
     observation = np.array(self._observation)
-    if self._observation_noise_stdev > 0:
+    # if self._observation_noise_stdev > 0:
+    #   observation += self._add_obs_noise  
+
+    ## Nathan -- correct version for noise, I assume desire velocity and internal CPG is perfect because it is software state
+    if self._observation_noise_stdev > 0 and (self._observation_space_mode == "FULL" or self._observation_space_mode == "MEDIUM"):
+        # Zero out noise for desired velocity (0:3) and CPG state (7:23)
+      self._add_obs_noise[0:3] = 0.0
+      self._add_obs_noise[7:23] = 0.0
+    
+    if (self._observation_noise_stdev > 0):
       observation += self._add_obs_noise
+      
     return observation
+    
 
   def _get_info(self) -> dict:
     return {'base_pos': self.robot.GetBasePosition()}
@@ -1059,7 +1076,8 @@ class QuadrupedGymEnv(gym.Env):
         ground_mu_k = mu_min+(1-mu_min)*np.random.random()
         self._ground_mu_k = ground_mu_k
         self._pybullet_client.changeDynamics(self.plane, -1, lateralFriction=ground_mu_k)
-        # self._add_base_mass_offset()
+        if (self._add_base_mass):
+          self._add_base_mass_offset()
         if self._is_render:
           print('ground friction coefficient is', ground_mu_k)
 

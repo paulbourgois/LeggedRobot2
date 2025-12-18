@@ -69,7 +69,8 @@ env_configs = {"motor_control_mode":"CPG",
                "terrain": "SLOPES",
                # "terrain": None,
                "terrain_difficulty": 4,
-               "add_noise": False               
+               "add_noise": True,
+               "add_base_mass": True        
                }
 
 tb_log_name = "ppo_cpg_" + env_configs["observation_space_mode"]
@@ -83,7 +84,7 @@ else:
 
 if LOAD_NN:
     interm_dir = "./logs/intermediate_models/"
-    log_dir = interm_dir + '121625215450' # add path
+    log_dir = interm_dir + '121725230254_slope4_0.6to0.9_adjusted_learning_curve' # add path
     stats_path = os.path.join(log_dir, "vec_normalize.pkl")
     model_name = get_latest_model(log_dir)
 
@@ -198,7 +199,7 @@ if LOAD_NN:
 
 # Learn and save (may need to train for longer)
 callbacks = CallbackList([checkpoint_callback, reward_tracking_callback])
-model.learn(total_timesteps=4000000, log_interval=1,callback=callbacks, tb_log_name=tb_log_name)
+model.learn(total_timesteps=1500000, log_interval=1,callback=callbacks, tb_log_name=tb_log_name)
 
 # Don't forget to save the VecNormalize statistics when saving the agent
 model.save( os.path.join(SAVE_PATH, "rl_model" ) ) 

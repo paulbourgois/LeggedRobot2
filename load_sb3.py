@@ -53,33 +53,114 @@ from stable_baselines3.common.env_util import make_vec_env # fix for newer versi
 from env.quadruped_gym_env import QuadrupedGymEnv
 from utils.utils import plot_results
 from utils.file_utils import get_latest_model, load_all_results
+from enum import Enum
 
-LEARNING_ALG = "PPO" #"SAC"
+LEARNING_ALG = "PPO"
 interm_dir = "./logs/intermediate_models/"
-# path to saved models, i.e. interm_dir + '102824115106'
-# log_dir = interm_dir + '120625210952'
-log_dir = interm_dir + '121725230254'
 
-# initialize env configs (render at test time)
-# check ideal conditions, as well as robustness to UNSEEN noise during training
-env_config = {}
+# ---------- Policy Selector ----------
+class PolicyName(str, Enum):
+    BASELINE_FLAT = "baseline_flat"
+    FLAT_WITH_ALL_NOISE = "flat_with_all_noise"
+    FLAT_SELECTIVE_NOISE = "flat_selective_noise"
+    FLAT_ADD_MASS = "flat_add_mass"
+    SLOPE_NO_NOISE = "slope_no_noise"
+    SLOPE_ADD_NOISE_AND_MASS = "slope_add_noise_and_mass"
+    DEV_TEST = "dev_test"
 
-env_config["motor_control_mode"] = "CPG"
-env_config["task_env"] = "LR_COURSE_TASK" #  "LR_COURSE_TASK",
-#env_config["terrain"] = None #  "LR_COURSE_TASK",
-env_config["terrain"] = "SLOPES" #  "LR_COURSE_TASK",
-env_config["terrain_difficulty"] = 5 #  "LR_COURSE_TASK",
-env_config["observation_space_mode"] = "FULL"
-env_config['render'] = True
-env_config['record_video'] = False
-env_config['add_noise'] = False 
+POLICY_CONFIG = {
+    PolicyName.BASELINE_FLAT: (
+        "121625215450_baseline_full",
+        {
+            "terrain": None,
+            "add_noise": False,
+            "add_base_mass": False,
+        }
+    ),
+    PolicyName.FLAT_WITH_ALL_NOISE: (
+        "121825111022_flat_add_all_noise_best_0.8mpers",
+        {
+            "terrain": None,
+            "add_noise": True,
+            "add_base_mass": False,
+        }
+    ),
+    PolicyName.FLAT_SELECTIVE_NOISE: (
+        "121825165652_add_selective_noise",
+        {
+            "terrain": None,
+            "add_noise": True,
+            "add_base_mass": False,
+        }
+    ),
+    PolicyName.FLAT_ADD_MASS: (
+        "121825190758_flat_add_mass_500000",
+        {
+            "terrain": None,
+            "add_noise": True,
+            "add_base_mass": True,
+        }
+    ),
+    PolicyName.SLOPE_NO_NOISE: (
+        "121725230254_slope4_0.6to0.9_adjusted_learning_curve",
+        {
+            "terrain": "SLOPES",
+            "terrain_difficulty": 4,
+            "add_noise": False,
+            "add_base_mass": False,
+        }
+    ),
+    PolicyName.SLOPE_ADD_NOISE_AND_MASS: (
+        "121825194935_slop_add_mass_1500000",
+        {
+            "terrain": "SLOPES",
+            "terrain_difficulty": 4,
+            "add_noise": True,
+            "add_base_mass": True,
+        }
+    ),
+    PolicyName.DEV_TEST: (
+        "121825231820_slope_noise_mass",
+        {
+            "terrain": "SLOPES",
+            "terrain_difficulty": 4,
+            "add_noise": True,
+            "add_base_mass": True,
+        }
+    ),
+}
+
+# ---------- Choose policy to test ----------
+chosen_policy = PolicyName.SLOPE_ADD_NOISE_AND_MASS  # 👈 change this line to test other policies. 
+#### If  you select SLOPES, you can change the terrain difficulty: upto 5 with no noise (4 = 0.2 pitch)
+
+log_subdir, overrides = POLICY_CONFIG[chosen_policy]
+log_dir = os.path.join(interm_dir, log_subdir)
+
+# ---------- Build env_config ----------
+env_config = {
+    "motor_control_mode": "CPG",
+    "task_env": "LR_COURSE_TASK",
+    "terrain": None,
+    "terrain_difficulty": 0,
+    "observation_space_mode": "FULL",
+    "render": True,
+    "record_video": False,
+    "add_noise": False,
+    "add_base_mass": False,
+}
+env_config.update(overrides)
+
+
+
 
 # get latest model and normalization stats, and plot 
 stats_path = os.path.join(log_dir, "vec_normalize.pkl")
 model_name = get_latest_model(log_dir)
 monitor_results = load_results(log_dir)
 print(monitor_results)
-plot_results([log_dir] , 10e10, 'timesteps', LEARNING_ALG + ' ')
+# plot_results([log_dir] , 10e10, 'timesteps', LEARNING_ALG + "_" + chosen_policy.value , save_dir="report_images") [TODO]: hey team, use this to save our plots
+plot_results([log_dir] , 10e10, 'timesteps', LEARNING_ALG + "_" + chosen_policy.value)
 plt.show() 
 
 # reconstruct env 
@@ -96,16 +177,25 @@ elif LEARNING_ALG == "SAC":
     model = SAC.load(model_name, env)
 print("\nLoaded model", model_name, "\n")
 
-env.venv.env_method("set_command", 1.0, 0.0, 0.0, randomize=False, override = True)
+
+
+#########################
+## Hi TAs, you can use this to change the velocity command that you want
+#########################
+env.venv.env_method("set_command", 0.80, 0.0, 0.0, randomize=False, override = True)
 obs = env.reset()
 episode_reward = 0
 
 for i in range(7000):
-    # change command every 400 steps
-    # if (i % 600 > 300):
-    #     env.venv.env_method("set_command", 0.5, 0.0, 0.0, randomize=False, override = True)
-    # else:
-    #     env.venv.env_method("set_command", 1.0, 0.0, 0.0, randomize=False, override = True)
+    #########################
+    ## Hi TAs, you can change here also if you want 😉
+    #########################
+    if chosen_policy in [PolicyName.BASELINE_FLAT, PolicyName.FLAT_ADD_MASS, PolicyName.FLAT_SELECTIVE_NOISE]:
+        # change command every 400 steps
+        if (i % 800 > 400):
+            env.venv.env_method("set_command", 0.5, 0.0, 0.0, randomize=False, override = True)
+        else:
+            env.venv.env_method("set_command", 0.8, 0.0, 0.0, randomize=False, override = True)
 
     
     action, _states = model.predict(obs,deterministic=True) # sample at test time? ([TODO]: test if the outputs make sense)
@@ -116,8 +206,3 @@ for i in range(7000):
         print('episode_reward', episode_reward)
         print('Final base position', info[0]['base_pos'])
         episode_reward = 0
-
-    # [TODO] save data from current robot states for plots 
-    # To get base position, for example: env.envs[0].env.robot.GetBasePosition() 
-    
-# [TODO] make plots
