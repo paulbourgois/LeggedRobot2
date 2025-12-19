@@ -71,7 +71,7 @@ conda install conda-forge::pybullet
 ├── utils/                      # Some file i/o and plotting helpers
 │   └── file_utils.py           # Basic helper functions 
 │   └── utils.py                # Basic helper functions 
-├── load_sb3.py                 # Loads and plays trained RL policy
+├── load_sb3.py                 # HI TAs 👈👈👈, you can change and test our policies in here, but select the ones for actual deployment, not testing ones 😉  
 ├── run_cpg.py                  # Run CPG to joint commands
 ├── run_sb3.py                  # Provides an interface to train RL policy with RL algorithms
 └── requirements.txt            # Dependencies

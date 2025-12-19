@@ -685,7 +685,6 @@ class QuadrupedGymEnv(gym.Env):
 
     vx_des, vy_des, wz_des = self.des_velocity  # you want WORLD-FRAME commands
 
-    # --- energy/work (your usual) ---
     energy_work = 0.0
     for tau, vel in zip(self._dt_motor_torques, self._dt_motor_velocities):
         energy_work += float(np.abs(np.dot(tau, vel)) * self._time_step)
@@ -697,17 +696,15 @@ class QuadrupedGymEnv(gym.Env):
       r_vx_track = 0
     else:
       r_vx_track = 0.05 * float(np.exp(-(1.0 / 0.25) * (vx - vx_des) ** 2))
-    # range: [0, 0.05]
 
-    # 3) Explicit backward penalty (prevents the "backward local optimum")
     back = float(max(0.0, -vx))               # only if vx < 0
     p_backward = -0.10 * (back * back)        # strong enough to matter
 
-    # 4) Straightness & drift in WORLD frame
+    # Straightness & drift in WORLD frame
     yaw_wrapped = float((yaw + np.pi) % (2*np.pi) - np.pi)
     p_yaw = -0.05 * (yaw_wrapped * yaw_wrapped)
 
-    # Penalize lateral world velocity directly (vy), plus lateral displacement y if you want corridor following
+    # Penalize lateral world velocity directly (vy), plus lateral displacement
     p_vy = -0.05 * float(vy * vy)
     p_y = -0.01 * float(abs(pos[1]))
 
@@ -729,7 +726,6 @@ class QuadrupedGymEnv(gym.Env):
         + p_energy
     )
 
-    # --- logging: IMPORTANT, log the exact vx used (world vx) ---
     self._rew_terms_step = {
         "r/fwd_dense": float(r_fwd_dense),
         "r/vx_track": float(r_vx_track),

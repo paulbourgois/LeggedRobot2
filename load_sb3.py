@@ -152,9 +152,18 @@ POLICY_CONFIG = {
     )
 }
 
-# ---------- Choose policy to test ----------
-chosen_policy = PolicyName.FLAT_ADD_MASS  # 👈 [For TA] change this line to test other policies. 
-#### If  you select SLOPES, you can change the terrain difficulty: upto 5 with no noise (4 = 0.2 pitch)
+# ---------- Choose policy to run ----------
+
+# [FOR TA] change this line to test other policies. 
+################### 👇👇👇👇👇👇👇👇👇👇 ###################
+#chosen_policy = PolicyName.BASELINE_FLAT  # just a baseline, not the best yet
+#chosen_policy = PolicyName.FLAT_SELECTIVE_NOISE
+#chosen_policy = PolicyName.FLAT_ADD_MASS
+chosen_policy = PolicyName.SLOPE
+#chosen_policy = PolicyName.SLOPE_ADD_NOISE_AND_MASS
+#chosen_policy = PolicyName.RANDOM_TERRAIN
+################### 👆👆👆👆👆👆👆👆👆👆 ###################
+#### 💡 If  you select SLOPES, you can change the terrain difficulty: upto 5 with no noise (4 = 0.2 pitch)
 
 log_subdir, overrides = POLICY_CONFIG[chosen_policy]
 log_dir = os.path.join(interm_dir, log_subdir)
@@ -222,7 +231,7 @@ for i in range(7000):
         if (i % 800 > 400):
             vx_cmd = 0.5
         else:
-            vx_cmd = 0.8
+            vx_cmd = 0.7
         env.venv.env_method("set_command", vx_cmd, 0.0, 0.0, randomize=False, override = True)
 
     if chosen_policy in [PolicyName.BASELINE_FLAT]:
@@ -270,9 +279,3 @@ for i in range(7000):
 
         ep_log = []
         episode_reward = 0
-
-if log:
-    import pandas as pd
-    df = pd.DataFrame(log)
-    df.to_csv(f"data/{chosen_policy.value}_log.csv", index=False)
-    print(f"Saved contact log to data/{chosen_policy.value}_log.csv")
