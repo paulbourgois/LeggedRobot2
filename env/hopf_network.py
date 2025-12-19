@@ -131,13 +131,15 @@ class HopfNetwork():
     # Fine tuned for omegas
     if gait == "TROT":
       self.PHI = self.PHI_trot
+      self._omega_swing=4.5*2*np.pi   # frequency in swing phase (can edit)
+      self._omega_stance=3*2*np.pi  # frequency in stance phase (can edit)
     elif gait == "PACE":
       self.PHI = self.PHI_pace
-      self._omega_swing = 5*2*np.pi
-      self._omega_stance = 2*2*np.pi
+      self._omega_swing = 7*2*np.pi
+      self._omega_stance = 2.5*2*np.pi
     elif gait == "BOUND":
       self.PHI = self.PHI_bound
-      self._omega_swing = 5.4*2*np.pi
+      self._omega_swing = 1.0*2*np.pi
       self._omega_stance = 1.5*2*np.pi
     elif gait == "WALK":
       self.PHI = self.PHI_walk
