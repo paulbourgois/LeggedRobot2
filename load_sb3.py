@@ -56,20 +56,21 @@ from utils.file_utils import get_latest_model, load_all_results
 from enum import Enum
 
 LEARNING_ALG = "PPO"
-interm_dir = "./logs/intermediate_models/"
+# interm_dir = "./logs/intermediate_models/"
+interm_dir = "./weights/"
 
 # ---------- Policy Selector ----------
 class PolicyName(str, Enum):
     BASELINE_FLAT = "baseline_flat"
-    FLAT_WITH_ALL_NOISE = "flat_with_all_noise"
-    FLAT_SELECTIVE_NOISE = "flat_selective_noise"
+    FLAT_WITH_ALL_NOISE = "flat_with_all_noise"           # For Dev, not for deployment, TA please dont select this! :)
+    FLAT_SELECTIVE_NOISE = "flat_selective_noise"          
     FLAT_ADD_MASS = "flat_add_mass"
-    SLOPE_FIRST_ATTEMPT = "slope_no_lr_adjustment"
-    SLOPE_NO_NOISE = "slope_no_noise"
+    SLOPE_FIRST_ATTEMPT = "slope_no_lr_adjustment"        # For Dev, not for deployment, TA please dont select this! :)
+    SLOPE = "slope"
     SLOPE_ADD_NOISE_AND_MASS = "slope_add_noise_and_mass"
     RANDOM_TERRAIN = "random_terrain"
-    SLOPES_FIRST_ATTEMPT = "slope_first_attempt"
-    DEV_TEST = "dev_test"
+    SLOPES_FIRST_ATTEMPT = "slope_first_attempt"           # For Dev, not for deployment, TA please dont select this! :)
+    DEV_TEST = "dev_test"                                  # For Dev, not for deployment, TA please dont select this! :)
 
 POLICY_CONFIG = {
     PolicyName.BASELINE_FLAT: (
@@ -101,7 +102,7 @@ POLICY_CONFIG = {
         {
             "terrain": None,
             "add_noise": True,
-            "add_base_mass": False, # change to true before submitting
+            "add_base_mass": True, # change to true before submitting
         }
     ),
     PolicyName.SLOPES_FIRST_ATTEMPT: (
@@ -113,7 +114,7 @@ POLICY_CONFIG = {
             "add_base_mass": False,
         }
     ),
-    PolicyName.SLOPE_NO_NOISE: (
+    PolicyName.SLOPE: (
         "121725230254_slope4_0.6to0.9_adjusted_learning_curve",
         {
             "terrain": "SLOPES",
@@ -128,7 +129,7 @@ POLICY_CONFIG = {
             "terrain": "SLOPES",
             "terrain_difficulty": 4,
             "add_noise": True,
-            "add_base_mass": False, # remember to add back to True to submit haha
+            "add_base_mass": True, # remember to add back to True to submit haha
         }
     ),
     PolicyName.RANDOM_TERRAIN: (
@@ -152,7 +153,7 @@ POLICY_CONFIG = {
 }
 
 # ---------- Choose policy to test ----------
-chosen_policy = PolicyName.RANDOM_TERRAIN  # 👈 change this line to test other policies. 
+chosen_policy = PolicyName.FLAT_ADD_MASS  # 👈 [For TA] change this line to test other policies. 
 #### If  you select SLOPES, you can change the terrain difficulty: upto 5 with no noise (4 = 0.2 pitch)
 
 log_subdir, overrides = POLICY_CONFIG[chosen_policy]
