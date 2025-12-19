@@ -64,8 +64,11 @@ class PolicyName(str, Enum):
     FLAT_WITH_ALL_NOISE = "flat_with_all_noise"
     FLAT_SELECTIVE_NOISE = "flat_selective_noise"
     FLAT_ADD_MASS = "flat_add_mass"
+    SLOPE_FIRST_ATTEMPT = "slope_no_lr_adjustment"
     SLOPE_NO_NOISE = "slope_no_noise"
     SLOPE_ADD_NOISE_AND_MASS = "slope_add_noise_and_mass"
+    RANDOM_TERRAIN = "random_terrain"
+    SLOPES_FIRST_ATTEMPT = "slope_first_attempt"
     DEV_TEST = "dev_test"
 
 POLICY_CONFIG = {
@@ -98,7 +101,16 @@ POLICY_CONFIG = {
         {
             "terrain": None,
             "add_noise": True,
-            "add_base_mass": True,
+            "add_base_mass": False, # change to true before submitting
+        }
+    ),
+    PolicyName.SLOPES_FIRST_ATTEMPT: (
+        "121725201646_slope4_0.5to1.2",
+        {
+            "terrain": "SLOPES",
+            "terrain_difficulty": 4,
+            "add_noise": False,
+            "add_base_mass": False,
         }
     ),
     PolicyName.SLOPE_NO_NOISE: (
@@ -116,22 +128,31 @@ POLICY_CONFIG = {
             "terrain": "SLOPES",
             "terrain_difficulty": 4,
             "add_noise": True,
-            "add_base_mass": True,
+            "add_base_mass": False, # remember to add back to True to submit haha
+        }
+    ),
+    PolicyName.RANDOM_TERRAIN: (
+        "121925103722_random",
+        {
+            "terrain": "RANDOM",
+            "terrain_difficulty": 3,
+            "add_noise": True,
+            "add_base_mass": False,
         }
     ),
     PolicyName.DEV_TEST: (
-        "121825231820_slope_noise_mass",
+        "121925004610_new_gaps",
         {
-            "terrain": "SLOPES",
-            "terrain_difficulty": 4,
+            "terrain": "GAPS",
+            "terrain_difficulty": 0,
             "add_noise": True,
-            "add_base_mass": True,
+            "add_base_mass": False,
         }
-    ),
+    )
 }
 
 # ---------- Choose policy to test ----------
-chosen_policy = PolicyName.SLOPE_ADD_NOISE_AND_MASS  # 👈 change this line to test other policies. 
+chosen_policy = PolicyName.RANDOM_TERRAIN  # 👈 change this line to test other policies. 
 #### If  you select SLOPES, you can change the terrain difficulty: upto 5 with no noise (4 = 0.2 pitch)
 
 log_subdir, overrides = POLICY_CONFIG[chosen_policy]
@@ -159,7 +180,7 @@ stats_path = os.path.join(log_dir, "vec_normalize.pkl")
 model_name = get_latest_model(log_dir)
 monitor_results = load_results(log_dir)
 print(monitor_results)
-# plot_results([log_dir] , 10e10, 'timesteps', LEARNING_ALG + "_" + chosen_policy.value , save_dir="report_images") [TODO]: hey team, use this to save our plots
+# plot_results([log_dir] , 10e10, 'timesteps', LEARNING_ALG + "_" + chosen_policy.value , save_dir="report_images") # [TODO]: hey team, use this to save our plots
 plot_results([log_dir] , 10e10, 'timesteps', LEARNING_ALG + "_" + chosen_policy.value)
 plt.show() 
 
@@ -182,27 +203,75 @@ print("\nLoaded model", model_name, "\n")
 #########################
 ## Hi TAs, you can use this to change the velocity command that you want
 #########################
-env.venv.env_method("set_command", 0.80, 0.0, 0.0, randomize=False, override = True)
+vx_cmd = 0.8
+env.venv.env_method("set_command", vx_cmd, 0.0, 0.0, randomize=False, override = True)
 obs = env.reset()
+episode_reward = 0
+
+log = []
+ep_log = []
 episode_reward = 0
 
 for i in range(7000):
     #########################
     ## Hi TAs, you can change here also if you want 😉
     #########################
-    if chosen_policy in [PolicyName.BASELINE_FLAT, PolicyName.FLAT_ADD_MASS, PolicyName.FLAT_SELECTIVE_NOISE]:
+    if chosen_policy in [PolicyName.FLAT_ADD_MASS, PolicyName.FLAT_SELECTIVE_NOISE]:
         # change command every 400 steps
         if (i % 800 > 400):
-            env.venv.env_method("set_command", 0.5, 0.0, 0.0, randomize=False, override = True)
+            vx_cmd = 0.5
         else:
-            env.venv.env_method("set_command", 0.8, 0.0, 0.0, randomize=False, override = True)
+            vx_cmd = 0.8
+        env.venv.env_method("set_command", vx_cmd, 0.0, 0.0, randomize=False, override = True)
+
+    if chosen_policy in [PolicyName.BASELINE_FLAT]:
+        # change command every 400 steps
+        if (i % 800 > 400):
+            vx_cmd = 0.5
+        else:
+            vx_cmd = 1.0
+        env.venv.env_method("set_command", vx_cmd, 0.0, 0.0, randomize=False, override = True)
+
+    if chosen_policy in [PolicyName.RANDOM_TERRAIN]:
+        vx_cmd = 0.6
+        env.venv.env_method("set_command", vx_cmd, 0.0, 0.0, randomize=False, override = True)
 
     
     action, _states = model.predict(obs,deterministic=True) # sample at test time? ([TODO]: test if the outputs make sense)
     obs, rewards, dones, info = env.step(action)
     episode_reward += rewards
-    
+
+    # log contact info for baseline_flat
+    contact_bool = env.venv.env_method("get_contact_info")[0]
+    base_vel = env.venv.env_method("get_base_velocity")[0]  # [vx, vy, vz]
+    roll, pitch, yaw = env.venv.env_method("get_base_orientation")[0]  # extract roll/yaw
+
+    ep_log.append({
+        "step": i,
+        "vx_cmd": vx_cmd,
+        "vx_actual": base_vel[0],
+        "LF": int(contact_bool[0]),
+        "RF": int(contact_bool[1]),
+        "LH": int(contact_bool[2]),
+        "RH": int(contact_bool[3]),
+        "roll": roll,
+        "pitch": pitch,
+    })
+
+
     if dones:
         print('episode_reward', episode_reward)
         print('Final base position', info[0]['base_pos'])
+        if episode_reward > 0:
+            log.extend(ep_log)
+        else:
+            print(f"Skipping episode with reward {float(episode_reward):.2f}")
+
+        ep_log = []
         episode_reward = 0
+
+if log:
+    import pandas as pd
+    df = pd.DataFrame(log)
+    df.to_csv(f"data/{chosen_policy.value}_log.csv", index=False)
+    print(f"Saved contact log to data/{chosen_policy.value}_log.csv")

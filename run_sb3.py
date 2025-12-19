@@ -66,11 +66,11 @@ USE_GPU = True # make sure to install all necessary drivers
 env_configs = {"motor_control_mode":"CPG",
                "task_env": "LR_COURSE_TASK",
                "observation_space_mode": "FULL",
-               "terrain": "SLOPES",
+               "terrain": "RANDOM",
                # "terrain": None,
-               "terrain_difficulty": 4,
+               "terrain_difficulty": 0,
                "add_noise": True,
-               "add_base_mass": True        
+               "add_base_mass": False        
                }
 
 tb_log_name = "ppo_cpg_" + env_configs["observation_space_mode"]
@@ -84,7 +84,7 @@ else:
 
 if LOAD_NN:
     interm_dir = "./logs/intermediate_models/"
-    log_dir = interm_dir + '121725230254_slope4_0.6to0.9_adjusted_learning_curve' # add path
+    log_dir = interm_dir + '121825165652_add_selective_noise' # add path
     stats_path = os.path.join(log_dir, "vec_normalize.pkl")
     model_name = get_latest_model(log_dir)
 

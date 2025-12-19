@@ -499,7 +499,20 @@ class QuadrupedGymEnv(gym.Env):
       observation += self._add_obs_noise
       
     return observation
-    
+  
+  def get_contact_info(self):
+    """
+    Forward contact bool from robot class to axamine gait pattern
+    """
+    _, _, _, contact_bool = self.robot.GetContactInfo()
+    return contact_bool  # [LF, RF, LH, RH] bool list
+  
+  def get_base_velocity(self):
+    return self.robot.GetBaseLinearVelocity()
+  
+  def get_base_orientation(self):
+    return self.robot.GetBaseOrientationRollPitchYaw()
+  
 
   def _get_info(self) -> dict:
     return {'base_pos': self.robot.GetBasePosition()}
@@ -599,6 +612,70 @@ class QuadrupedGymEnv(gym.Env):
   def _cpg_rl_tracking_term(self, error, sigma=0.17):
     return float(np.exp(-np.sum(error**2) / sigma))
   
+  def _reward_gap_recovery(self):
+    vx, vy, vz = self.robot.GetBaseLinearVelocity()
+    wx, wy, wz = self.robot.GetBaseAngularVelocity()
+    roll, pitch, yaw = self.robot.GetBaseOrientationRollPitchYaw()
+    base_x, base_y, base_z = self.robot.GetBasePosition()
+
+    # Survival reward (time-based)
+    reward_alive = +0.1
+
+    # Forward progress shaping (saturate slowly)
+    vx_fwd = max(0.0, vx)
+    r_forward = 0.05 * np.clip(vx_fwd, 0.0, 0.3)
+
+    # Penalize instability
+    p_roll = -0.1 * roll**2
+    p_pitch = -0.1 * pitch**2
+    p_ang = -0.01 * (wx**2 + wy**2)
+
+    # Penalize torso vertical bounce (jerkiness)
+    vz_thresh = 0.3
+    vz_excess = max(0.0, abs(vz) - vz_thresh)
+    p_vz = -0.02 * vz_excess**2
+
+    # Penalize fall (base_z too low)
+    fall_penalty = -1.0 if base_z < 0.2 else 0.0
+
+    # Optional: reward recovery if torso regains upright
+    recover_bonus = 0.1 if abs(pitch) < 0.1 and abs(roll) < 0.1 else 0.0
+
+    # Optional: energy penalty
+    energy_work = 0.0
+    for tau, vel in zip(self._dt_motor_torques, self._dt_motor_velocities):
+        energy_work += float(np.abs(np.dot(tau, vel)) * self._time_step)
+    p_energy = -0.005 * energy_work
+
+    # Total reward
+    reward = (
+        reward_alive
+        + r_forward
+        + p_roll + p_pitch + p_ang + p_vz
+        + p_energy
+        + fall_penalty
+        + recover_bonus
+    )
+
+    # Logging (highly recommended)
+    self._rew_terms_step = {
+        "r/alive": float(reward_alive),
+        "r/fwd": float(r_forward),
+        "p/roll": float(p_roll),
+        "p/pitch": float(p_pitch),
+        "p/ang": float(p_ang),
+        "p/vz": float(p_vz),
+        "p/energy": float(p_energy),
+        "r/recover_bonus": float(recover_bonus),
+        "p/fall": float(fall_penalty),
+        "reward": float(reward),
+        "raw/base_z": float(base_z),
+        "raw/vx": float(vx),
+        "raw/vz": float(vz),
+    }
+
+    return float(reward)
+  
   def _reward_lr_course_full(self):
     # --- world-frame state ---
     vx, vy, vz = self.robot.GetBaseLinearVelocity()
@@ -616,7 +693,10 @@ class QuadrupedGymEnv(gym.Env):
     # Reward positive vx directly (dense shaping), saturate at vx_des (or 1.0).
     vx_cap = float(max(0.2, min(vx_des, 1.2)))  # keep sane
     r_fwd_dense = 0.10 * float(np.clip(vx, 0.0, vx_cap) / max(vx_cap, 1e-3))
-    r_vx_track = 0.05 * float(np.exp(-(1.0 / 0.25) * (vx - vx_des) ** 2))
+    if (self._terrain == "GAPS"):
+      r_vx_track = 0
+    else:
+      r_vx_track = 0.05 * float(np.exp(-(1.0 / 0.25) * (vx - vx_des) ** 2))
     # range: [0, 0.05]
 
     # 3) Explicit backward penalty (prevents the "backward local optimum")
@@ -749,7 +829,10 @@ class QuadrupedGymEnv(gym.Env):
     if self._TASK_ENV == "FWD_LOCOMOTION":
       return self._reward_fwd_locomotion()
     elif self._TASK_ENV == "LR_COURSE_TASK":
-      return self._reward_lr_course_full()
+      if self._terrain == "GAPS":
+        return self._reward_gap_recovery()
+      else:
+        return self._reward_lr_course_full()
     elif self._TASK_ENV == "FLAGRUN":
       return self._reward_flag_run()
     else:
